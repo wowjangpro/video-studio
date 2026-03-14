@@ -99,8 +99,8 @@ def transcribe_speech_regions(
     _log(f"STT 시작: {len(groups)}개 그룹, 음성 {total_speech:.1f}초")
 
     # 모델 로드
-    _log("Whisper 모델 로딩 (medium, int8)...")
-    model = WhisperModel("medium", device="cpu", compute_type="int8")
+    _log("Whisper 모델 로딩 (large-v3, int8)...")
+    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
     _log("Whisper 모델 로딩 완료")
 
     # 오디오 로드

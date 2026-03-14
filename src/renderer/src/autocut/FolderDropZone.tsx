@@ -54,25 +54,25 @@ export default function FolderDropZone(): JSX.Element {
 
   if (isLoading) {
     return (
-      <div className="folder-drop-zone folder-drop-zone--loading">
-        <div className="folder-drop-zone__spinner" />
-        <div className="folder-drop-zone__text">영상 파일 스캔 중...</div>
-        <div className="folder-drop-zone__formats">썸네일 생성 및 파일 정보를 읽고 있습니다</div>
+      <div className="module-drop-zone module-drop-zone--loading">
+        <div className="module-drop-zone__spinner" />
+        <div className="module-drop-zone__text">영상 파일 스캔 중...</div>
+        <div className="module-drop-zone__formats">썸네일 생성 및 파일 정보를 읽고 있습니다</div>
       </div>
     )
   }
 
   return (
     <div
-      className={`folder-drop-zone ${isDragOver ? 'folder-drop-zone--active' : ''}`}
+      className={`module-drop-zone ${isDragOver ? 'module-drop-zone--active' : ''}`}
       onClick={handleClick}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="folder-drop-zone__icon">📁</div>
-      <div className="folder-drop-zone__text">캠핑 영상 폴더를 드래그하거나 클릭하여 선택</div>
-      <div className="folder-drop-zone__formats">mp4, mov, mkv 등 영상 파일이 포함된 폴더</div>
+      <div className="module-drop-zone__icon">📁</div>
+      <div className="module-drop-zone__text">캠핑 영상 폴더를 드래그하거나 클릭하여 선택</div>
+      <div className="module-drop-zone__formats">mp4, mov, mkv 등 영상 파일이 포함된 폴더</div>
     </div>
   )
 }

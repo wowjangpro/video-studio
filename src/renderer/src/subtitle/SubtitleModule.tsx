@@ -157,8 +157,8 @@ export default function SubtitleModule(): JSX.Element {
 
   return (
     <div className="sub-module">
-      <div className="sub-module__header">
-        <nav className="sub-module__nav">
+      <div className="module-header">
+        <div className="module-header__left">
           <button
             className={`btn btn--sm${currentView === 'subtitle' ? ' btn--primary' : ''}`}
             onClick={() => setCurrentView('subtitle')}
@@ -171,12 +171,14 @@ export default function SubtitleModule(): JSX.Element {
           >
             설명 번역
           </button>
-        </nav>
-        {showEditor && currentView === 'subtitle' && (
-          <button className="btn btn--sm" onClick={reset}>
-            새 파일
-          </button>
-        )}
+        </div>
+        <div className="module-header__right">
+          {showEditor && currentView === 'subtitle' && (
+            <button className="btn btn--sm" onClick={reset}>
+              새 파일
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="sub-module__content">
@@ -185,7 +187,7 @@ export default function SubtitleModule(): JSX.Element {
         )}
 
         {currentView === 'subtitle' && stage === 'idle' && !filePath && (
-          <div className="sub-dropzone-wrapper">
+          <div className="module-idle">
             <FileDropZone />
             <div className="sub-url-input-group">
               <input
@@ -203,6 +205,17 @@ export default function SubtitleModule(): JSX.Element {
               >
                 {urlLoading ? '확인 중...' : '다운로드'}
               </button>
+            </div>
+            <div className="module-guide">
+              <h3 className="module-guide__title">자막 추출 워크플로우</h3>
+              <ol className="module-guide__steps">
+                <li><strong>영상 선택</strong> — 로컬 파일 또는 YouTube URL로 영상을 불러옵니다</li>
+                <li><strong>오디오 추출</strong> — FFmpeg로 16kHz WAV 오디오를 분리합니다</li>
+                <li><strong>음성인식</strong> — VAD로 음성 구간을 감지하고 자막을 생성합니다 <span className="module-guide__model">Silero VAD + faster-whisper (large-v3)</span></li>
+                <li><strong>맞춤법 교정</strong> — 생성된 자막의 맞춤법을 자동 교정합니다 <span className="module-guide__model">네이버 맞춤법 검사기</span></li>
+                <li><strong>편집 및 저장</strong> — 자막을 수정하고 SRT 파일로 저장합니다</li>
+                <li><strong>번역 (선택)</strong> — 영어/일본어로 자막을 번역합니다 <span className="module-guide__model">Qwen2.5:14B (Ollama)</span></li>
+              </ol>
             </div>
           </div>
         )}

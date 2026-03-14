@@ -1,9 +1,9 @@
 import { useAppStore, ModuleName } from './app-store'
 
 const TABS: { id: ModuleName; label: string }[] = [
+  { id: 'autocut', label: 'AI 편집' },
   { id: 'subtitle', label: '자막 추출' },
-  { id: 'bgm', label: 'BGM 생성' },
-  { id: 'autocut', label: 'AI 편집' }
+  { id: 'bgm', label: 'BGM 생성' }
 ]
 
 export default function TabBar(): JSX.Element {

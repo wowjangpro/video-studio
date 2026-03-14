@@ -35,26 +35,24 @@ export function FileDropZone(): JSX.Element {
 
   return (
     <div
-      className={`sub-drop-zone ${isDragging ? 'sub-drop-zone--active' : ''} ${fileName ? 'sub-drop-zone--has-file' : ''}`}
+      className={`module-drop-zone ${isDragging ? 'module-drop-zone--active' : ''} ${fileName ? 'module-drop-zone--has-file' : ''}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onClick={handleClick}
     >
       {fileName ? (
-        <div className="sub-drop-zone__file">
-          <div className="sub-drop-zone__icon">&#127916;</div>
-          <div className="sub-drop-zone__filename">{fileName}</div>
-          <div className="sub-drop-zone__hint">클릭하여 다른 파일 선택</div>
-        </div>
+        <>
+          <div className="module-drop-zone__icon">🎬</div>
+          <div className="module-drop-zone__filename">{fileName}</div>
+          <div className="module-drop-zone__hint">클릭하여 다른 파일 선택</div>
+        </>
       ) : (
-        <div className="sub-drop-zone__empty">
-          <div className="sub-drop-zone__icon">&#128193;</div>
-          <div className="sub-drop-zone__text">영상 파일을 드래그하거나 클릭하여 선택하세요</div>
-          <div className="sub-drop-zone__formats">
-            mp4, mkv, avi, mov, wmv, flv, webm, ts, m4v
-          </div>
-        </div>
+        <>
+          <div className="module-drop-zone__icon">📁</div>
+          <div className="module-drop-zone__text">영상 파일을 드래그하거나 클릭하여 선택하세요</div>
+          <div className="module-drop-zone__formats">mp4, mkv, avi, mov, wmv, flv, webm, ts, m4v</div>
+        </>
       )}
     </div>
   )
