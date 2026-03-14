@@ -1,0 +1,32 @@
+{
+  "name": "video-studio",
+  "version": "0.1.0",
+  "description": "자막 추출, BGM 생성, AI 편집을 통합한 영상 제작 데스크톱 앱",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --mac",
+    "setup": "cd python && bash setup.sh",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.22",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

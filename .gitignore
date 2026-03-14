@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+python/shared-venv/
+python/bgm-venv/
+
+# Node.js / Electron
+node_modules/
+out/
+dist/
+release/
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+
+# 임시 파일
+*.wav
+*.mp3

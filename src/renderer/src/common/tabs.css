@@ -1,0 +1,103 @@
+/* ===== Tab Bar ===== */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  padding-left: 78px; /* macOS 신호등 버튼 여유 */
+}
+
+.tab-bar__tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.tab-bar__tab:hover {
+  color: var(--text);
+}
+
+.tab-bar__tab--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab-bar__label {
+  white-space: nowrap;
+}
+
+.tab-bar__indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tab-bar__indicator--running {
+  background: var(--accent);
+  animation: indicator-pulse 1.2s ease-in-out infinite;
+}
+
+.tab-bar__indicator--complete {
+  background: var(--success);
+}
+
+.tab-bar__indicator--error {
+  background: var(--danger);
+}
+
+@keyframes indicator-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ===== Conflict Modal ===== */
+.conflict-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conflict-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.conflict-modal__content {
+  position: relative;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 420px;
+  width: 90%;
+}
+
+.conflict-modal__message {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.conflict-modal__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

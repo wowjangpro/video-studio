@@ -1,0 +1,10 @@
+# bgm-studio 전용 의존성
+torch>=2.0
+torchaudio
+transformers
+audiocraft
+librosa
+soundfile
+moviepy
+httpx
+Pillow
