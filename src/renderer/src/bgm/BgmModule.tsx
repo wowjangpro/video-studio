@@ -77,17 +77,34 @@ export default function BgmModule(): JSX.Element {
 
   return (
     <div className="bgm-module">
-      <header className="bgm-module__header">
-        <h2 className="bgm-module__title">BGM Studio</h2>
-        {filePath && (
-          <button className="btn btn--sm" onClick={reset}>
-            새 파일
-          </button>
-        )}
-      </header>
+      {filePath && (
+        <div className="module-header">
+          <div className="module-header__left" />
+          <div className="module-header__right">
+            <button className="btn btn--sm" onClick={reset}>
+              새 파일
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="bgm-module__content">
-        {stage === 'idle' && !filePath && <FileDropZone />}
+        {stage === 'idle' && !filePath && (
+          <div className="module-idle">
+            <FileDropZone />
+            <div className="module-guide">
+              <h3 className="module-guide__title">BGM 생성 워크플로우</h3>
+              <ol className="module-guide__steps">
+                <li><strong>영상 선택</strong> — BGM을 만들 영상 파일을 선택합니다</li>
+                <li><strong>구간 설정</strong> — BGM을 적용할 영상 구간을 지정합니다</li>
+                <li><strong>장면 분석</strong> — AI가 영상의 분위기와 장면을 분석합니다 <span className="module-guide__model">LLaMA 3.2 Vision:11B (Ollama)</span></li>
+                <li><strong>프롬프트 편집</strong> — 분석된 음악 프롬프트를 확인하고 수정합니다</li>
+                <li><strong>BGM 생성</strong> — AI가 영상에 맞는 배경음악을 생성합니다 <span className="module-guide__model">ACE-Step 1.5</span></li>
+                <li><strong>미리듣기 및 저장</strong> — 생성된 BGM을 들어보고 선택합니다</li>
+              </ol>
+            </div>
+          </div>
+        )}
 
         {stage === 'idle' && filePath && (
           <div className="bgm-module__editor">

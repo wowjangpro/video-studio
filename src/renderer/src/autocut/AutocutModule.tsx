@@ -186,8 +186,20 @@ export default function AutocutModule(): JSX.Element {
   if (!folderPath) {
     return (
       <div className="autocut-module" ref={editorRef}>
-        <div className="autocut-module__empty">
+        <div className="module-idle">
           <FolderDropZone />
+          <div className="module-guide">
+            <h3 className="module-guide__title">AI 편집 워크플로우</h3>
+            <ol className="module-guide__steps">
+              <li><strong>폴더 선택</strong> — 영상 파일이 들어있는 폴더를 선택합니다</li>
+              <li><strong>오디오 추출</strong> — FFmpeg로 각 영상에서 오디오를 분리합니다</li>
+              <li><strong>Stage 1 스캔</strong> — 모션/오디오/밝기 등 경량 메트릭 분석</li>
+              <li><strong>VAD + STT</strong> — 음성 구간 감지 및 텍스트 변환 <span className="module-guide__model">Silero VAD + faster-whisper (large-v3)</span></li>
+              <li><strong>Stage 2 비전</strong> — 장면 분류 및 행동 태깅 <span className="module-guide__model">Qwen2.5-VL:7B 또는 Claude</span></li>
+              <li><strong>AI 편집</strong> — 스토리보드 기반 KEEP/CUT 판단 <span className="module-guide__model">Qwen3:14B 또는 Claude</span></li>
+              <li><strong>SRT 출력</strong> — 편집 가이드 SRT 파일 생성</li>
+            </ol>
+          </div>
         </div>
       </div>
     )
@@ -197,12 +209,12 @@ export default function AutocutModule(): JSX.Element {
   if (stage === 'error') {
     return (
       <div className="autocut-module" ref={editorRef}>
-        <div className="autocut-module__toolbar">
+        <div className="module-header">
           <button className="btn btn--sm" onClick={reset}>
             새 폴더
           </button>
         </div>
-        <div className="autocut-module__empty">
+        <div className="module-idle">
           <div className="error-panel">
             <div className="error-panel__message">{errorMessage}</div>
             <button className="btn btn--primary" onClick={reset}>
@@ -219,28 +231,32 @@ export default function AutocutModule(): JSX.Element {
 
   return (
     <div className="autocut-module" ref={editorRef}>
-      <div className="autocut-module__toolbar">
-        <button
-          className="btn btn--sm"
-          onClick={async () => {
-            const result = await window.electronAPI.autocut.loadSrt()
-            if (result) {
-              const segments = result.segments.map((s, i) => ({
-                id: i,
-                globalStart: s.globalStart,
-                globalEnd: s.globalEnd,
-                label: s.label,
-                score: s.score
-              }))
-              loadSrt(segments, result.srtPath)
-            }
-          }}
-        >
-          SRT 불러오기
-        </button>
-        <button className="btn btn--sm" onClick={reset}>
-          새 폴더
-        </button>
+      <div className="module-header">
+        <div className="module-header__left">
+          <button
+            className="btn btn--sm"
+            onClick={async () => {
+              const result = await window.electronAPI.autocut.loadSrt()
+              if (result) {
+                const segments = result.segments.map((s, i) => ({
+                  id: i,
+                  globalStart: s.globalStart,
+                  globalEnd: s.globalEnd,
+                  label: s.label,
+                  score: s.score
+                }))
+                loadSrt(segments, result.srtPath)
+              }
+            }}
+          >
+            SRT 불러오기
+          </button>
+        </div>
+        <div className="module-header__right">
+          <button className="btn btn--sm" onClick={reset}>
+            새 폴더
+          </button>
+        </div>
       </div>
       <div className="editor">
         <div className="editor__top" style={topStyle}>

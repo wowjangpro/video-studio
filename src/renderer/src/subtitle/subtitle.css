@@ -5,19 +5,6 @@
   height: 100%;
 }
 
-.sub-module__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.sub-module__nav {
-  display: flex;
-  gap: 4px;
-}
 
 .sub-module__content {
   flex: 1;
@@ -26,74 +13,13 @@
   overflow: hidden;
 }
 
-/* ===== Drop Zone ===== */
-.sub-dropzone-wrapper {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  padding: 40px;
-}
-
-.sub-drop-zone {
-  width: 100%;
-  max-width: 560px;
-  border: 2px dashed var(--border);
-  border-radius: 12px;
-  padding: 48px 32px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.sub-drop-zone:hover,
-.sub-drop-zone--active {
-  border-color: var(--accent);
-  background: rgba(79, 140, 255, 0.05);
-}
-
-.sub-drop-zone--has-file {
-  border-style: solid;
-  border-color: var(--success);
-  background: rgba(52, 199, 89, 0.05);
-}
-
-.sub-drop-zone__icon {
-  font-size: 40px;
-  margin-bottom: 12px;
-}
-
-.sub-drop-zone__text {
-  font-size: 16px;
-  margin-bottom: 8px;
-}
-
-.sub-drop-zone__formats {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.sub-drop-zone__filename {
-  font-size: 16px;
-  font-weight: 500;
-  word-break: break-all;
-}
-
-.sub-drop-zone__hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 8px;
-}
-
 /* ===== URL Input ===== */
 .sub-url-input-group {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  max-width: 560px;
+  max-width: 720px;
 }
 
 .sub-url-input {
