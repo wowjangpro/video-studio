@@ -156,8 +156,8 @@
   color: var(--text);
   font-size: 13px;
   font-family: var(--font);
+  text-align: left;
   outline: none;
-  text-align: center;
 }
 
 .sub-file-preview__desc:focus {

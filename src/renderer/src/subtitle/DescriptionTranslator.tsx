@@ -150,14 +150,22 @@ export function DescriptionTranslator(): JSX.Element {
                   </button>
                 </div>
                 <div className="sub-desc-translator__title-edit">
-                  <div className={`sub-desc-translator__title-readonly${titleOver ? ' sub-desc-translator__title-readonly--over' : ''}`}>
-                    {t.title}
-                  </div>
+                  <input
+                    type="text"
+                    className={`sub-desc-translator__title-input${titleOver ? ' sub-desc-translator__title-input--over' : ''}`}
+                    value={t.title}
+                    readOnly
+                  />
                   <span className={`sub-desc-translator__char-count${titleOver ? ' sub-desc-translator__char-count--over' : ''}`}>
                     {titleLen}/100
                   </span>
                 </div>
-                <div className="sub-desc-translator__text">{t.description}</div>
+                <textarea
+                  className="sub-desc-translator__desc-input"
+                  value={t.description}
+                  readOnly
+                  rows={8}
+                />
               </div>
             )
           })}
