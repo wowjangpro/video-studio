@@ -195,7 +195,7 @@ export default function AutocutModule(): JSX.Element {
               <li><strong>오디오 추출</strong> — FFmpeg로 각 영상에서 오디오를 분리합니다</li>
               <li><strong>Stage 1 스캔</strong> — 모션/오디오/밝기 등 경량 메트릭 분석</li>
               <li><strong>VAD + STT</strong> — 음성 구간 감지 및 텍스트 변환 <span className="module-guide__model">Silero VAD + faster-whisper (large-v3)</span></li>
-              <li><strong>Stage 2 비전</strong> — 장면 분류 및 행동 태깅 <span className="module-guide__model">Qwen2.5-VL:7B 또는 Claude</span></li>
+              <li><strong>Stage 2 비전</strong> — 5프레임 맥락 기반 장면 분류 및 행동 태깅 <span className="module-guide__model">Qwen2.5-VL:7B 또는 Claude</span></li>
               <li><strong>AI 편집</strong> — 스토리보드 기반 KEEP/CUT 판단 <span className="module-guide__model">Qwen3:14B 또는 Claude</span></li>
               <li><strong>SRT 출력</strong> — 편집 가이드 SRT 파일 생성</li>
             </ol>
