@@ -340,7 +340,7 @@ def main():
 
                 seg_data = {
                     "start": round(max(0, sub["start"] + START_OFFSET), 3),
-                    "end": round(sub["end"], 3),
+                    "end": round(sub["end"] + 0.1, 3),
                     "text": sub["text"],
                 }
                 all_segments.append(seg_data)
