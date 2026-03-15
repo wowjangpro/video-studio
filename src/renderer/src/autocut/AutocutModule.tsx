@@ -44,31 +44,22 @@ export default function AutocutModule(): JSX.Element {
   // IPC 이벤트 리스너
   useEffect(() => {
     const cleanupProgress = window.electronAPI.autocut.onProgress((data) => {
-      console.log(`[autocut:renderer] progress: ${data.stage} ${data.percent}% — ${data.message}`)
       setProgress(data.stage as ReturnType<typeof useAutocutStore.getState>['stage'], data.percent, data.message)
     })
     const cleanupWindow = window.electronAPI.autocut.onWindowResult((data) => {
-      console.log(`[autocut:renderer] window_result: ${data.decision} [${data.label}] score=${data.score}`)
       addWindowResult(data)
     })
     const cleanupComplete = window.electronAPI.autocut.onAnalysisComplete((data) => {
-      console.log(`[autocut:renderer] analysis complete: ${data.totalKeep}개 KEEP, srt=${data.srtPath}`)
       setAnalysisComplete(data.keepSegments, data.srtPath)
-      if (data.srtPath) {
-        console.log(`[autocut:renderer] SRT 자동 저장: ${data.srtPath}`)
-      }
     })
     const cleanupError = window.electronAPI.autocut.onError((message) => {
-      console.error(`[autocut:renderer] analysis error: ${message}`)
       setError(message)
     })
     const cleanupCancelled = window.electronAPI.autocut.onCancelled(() => {
-      console.log('[autocut:renderer] analysis cancelled')
       setPaused(false)
       setProgress('idle', 0, '')
     })
     const cleanupFileComplete = window.electronAPI.autocut.onFileComplete((data) => {
-      console.log(`[autocut:renderer] file_complete: #${data.fileIndex}`)
       const nextIndex = data.fileIndex + 1
       const { files: currentFiles } = useAutocutStore.getState()
       if (nextIndex < currentFiles.length) {
@@ -76,11 +67,9 @@ export default function AutocutModule(): JSX.Element {
       }
     })
     const cleanupPaused = window.electronAPI.autocut.onPaused(() => {
-      console.log('[autocut:renderer] analysis paused')
       setPaused(true)
     })
     const cleanupResumed = window.electronAPI.autocut.onResumed(() => {
-      console.log('[autocut:renderer] analysis resumed')
       setPaused(false)
     })
 
@@ -107,12 +96,8 @@ export default function AutocutModule(): JSX.Element {
     prevAnalysisFileRef.current = analysisFileIndex
 
     const { userPlayback: up, videoPlaying: vp } = useAutocutStore.getState()
-    console.log(`[autocut:auto-seek] fileIdx=${analysisFileIndex} userPlayback=${up} videoPlaying=${vp}`)
     if (!up && !vp && files[analysisFileIndex]) {
-      console.log(`[autocut:auto-seek] → seekTo file ${analysisFileIndex}`)
       seekTo(files[analysisFileIndex].cumulativeOffset)
-    } else {
-      console.log(`[autocut:auto-seek] → 재생 중이므로 이동 안 함`)
     }
   }, [analysisFileIndex, stage, files, seekTo])
 
@@ -130,12 +115,9 @@ export default function AutocutModule(): JSX.Element {
     if (!justStopped) return
     if (!isProcessing(stage)) return
 
-    console.log(`[autocut:timer] 수동 재생 정지 → 10초 복귀 타이머 시작`)
     returnTimerRef.current = setTimeout(() => {
       const { analysisFileIndex: idx, files: fs, userPlayback: up, videoPlaying: vp } = useAutocutStore.getState()
-      console.log(`[autocut:timer] 10초 경과 — userPlayback=${up} videoPlaying=${vp}`)
       if (idx >= 0 && fs[idx] && !up && !vp) {
-        console.log(`[autocut:timer] → seekTo file ${idx}`)
         seekTo(fs[idx].cumulativeOffset)
       }
       returnTimerRef.current = null
@@ -287,7 +269,7 @@ export default function AutocutModule(): JSX.Element {
                       className="btn btn--sm btn--primary"
                       onClick={async () => {
                         const saved = await window.electronAPI.autocut.saveSrt(keepSegments)
-                        if (saved) console.log(`[autocut:renderer] SRT 저장 완료: ${saved}`)
+                        if (!saved) return
                       }}
                     >
                       SRT 저장

@@ -63,7 +63,6 @@ class ResourceManager {
 
     this.activeModules.set(module, { module, resources, ollamaGpuGB })
     this.notifyRenderer()
-    console.log(`[resource] acquired: ${module} (gpu=${ollamaGpuGB}GB, total=${totalGpu}GB)`)
     return { conflict: false }
   }
 
@@ -71,7 +70,6 @@ class ResourceManager {
   release(module: ModuleName): void {
     this.activeModules.delete(module)
     this.notifyRenderer()
-    console.log(`[resource] released: ${module}`)
   }
 
   /** 특정 모듈이 활성 상태인지 확인 */
@@ -91,7 +89,6 @@ class ResourceManager {
       : 0
     this.activeModules.set(module, { module, resources, ollamaGpuGB })
     this.notifyRenderer()
-    console.log(`[resource] force-acquired: ${module} (gpu=${ollamaGpuGB}GB)`)
   }
 
   /** Renderer에 모듈 상태 알림 */

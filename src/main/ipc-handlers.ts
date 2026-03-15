@@ -32,7 +32,6 @@ export function registerIpcHandlers(): void {
 
   // 공통: 미디어 URL
   ipcMain.handle('get-media-url', async (_event, filePath: string) => {
-    console.log(`[ipc] get-media-url: ${filePath.split('/').pop()}`)
     return 'file://' + filePath
   })
 

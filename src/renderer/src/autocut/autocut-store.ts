@@ -236,15 +236,9 @@ export const useAutocutStore = create<AppState>((set, get) => ({
 
   setPaused: (paused) => set({ paused }),
 
-  setVideoPlaying: (playing) => {
-    console.log(`[autocut:store] setVideoPlaying(${playing})`)
-    set({ videoPlaying: playing })
-  },
+  setVideoPlaying: (playing) => set({ videoPlaying: playing }),
 
-  setUserPlayback: (active) => {
-    console.log(`[autocut:store] setUserPlayback(${active})`)
-    set({ userPlayback: active })
-  },
+  setUserPlayback: (active) => set({ userPlayback: active }),
 
   setProgress: (stage, percent, message) =>
     set(stage === 'idle'
