@@ -155,8 +155,8 @@ const autocut = {
 // ── Subtitle API ──
 const subtitle = {
   selectFile: (): Promise<string | null> => ipcRenderer.invoke('subtitle:select-file'),
-  startProcess: (filePath: string, modelSize?: string, description?: string): Promise<void> =>
-    ipcRenderer.invoke('subtitle:start-process', filePath, modelSize, description),
+  startProcess: (filePath: string, modelSize?: string, description?: string, aiEngine?: string): Promise<void> =>
+    ipcRenderer.invoke('subtitle:start-process', filePath, modelSize, description, aiEngine),
   cancelProcess: (): Promise<void> => ipcRenderer.invoke('subtitle:cancel-process'),
   saveSrt: (segments: SubtitleSegmentData[], filePath?: string): Promise<string | null> =>
     ipcRenderer.invoke('subtitle:save-srt', segments, filePath),
