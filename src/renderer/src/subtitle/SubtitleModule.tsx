@@ -106,8 +106,8 @@ export default function SubtitleModule(): JSX.Element {
   const handleStart = useCallback(async () => {
     if (!filePath || !window.electronAPI) return
     const desc = useSubtitleStore.getState().videoDescription
-    await window.electronAPI.subtitle.startProcess(filePath, undefined, desc || undefined)
-  }, [filePath])
+    await window.electronAPI.subtitle.startProcess(filePath, undefined, desc || undefined, correctionEngine === 'claude' ? 'claude' : undefined)
+  }, [filePath, correctionEngine])
 
   const handleChangeFile = useCallback(async () => {
     if (!window.electronAPI) return
@@ -131,6 +131,10 @@ export default function SubtitleModule(): JSX.Element {
   const [currentView, setCurrentView] = useState<'subtitle' | 'description'>('subtitle')
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [urlLoading, setUrlLoading] = useState(false)
+  const [correctionEngine, setCorrectionEngine] = useState<'naver' | 'claude'>(() => {
+    const saved = localStorage.getItem('subtitle:correctionEngine')
+    return saved === 'claude' ? 'claude' : 'naver'
+  })
 
   const handleDownload = useCallback(async () => {
     if (!youtubeUrl.trim() || !window.electronAPI) return
@@ -211,7 +215,7 @@ export default function SubtitleModule(): JSX.Element {
                 <li><strong>영상 선택</strong> — 로컬 파일 또는 YouTube URL로 영상을 불러옵니다</li>
                 <li><strong>오디오 추출</strong> — FFmpeg로 16kHz WAV 오디오를 분리합니다</li>
                 <li><strong>음성인식</strong> — VAD로 음성 구간을 감지하고 자막을 생성합니다 <span className="module-guide__model">Silero VAD + faster-whisper (large-v3)</span></li>
-                <li><strong>맞춤법 교정</strong> — 생성된 자막의 맞춤법을 자동 교정합니다 <span className="module-guide__model">네이버 맞춤법 검사기</span></li>
+                <li><strong>교정</strong> — 음성인식 오류를 교정합니다 <span className="module-guide__model">네이버 맞춤법 검사기 또는 Claude (오인식 단어 복원)</span></li>
                 <li><strong>편집 및 저장</strong> — 자막을 수정하고 SRT 파일로 저장합니다</li>
                 <li><strong>번역 (선택)</strong> — 영어/일본어로 자막을 번역합니다 <span className="module-guide__model">Qwen2.5:14B (Ollama) 또는 Claude</span></li>
               </ol>
@@ -228,6 +232,18 @@ export default function SubtitleModule(): JSX.Element {
               <div className="sub-file-preview__name">{fileName}</div>
               <DescriptionInput />
               <div className="sub-file-preview__actions">
+                <select
+                  className="sub-file-preview__engine-select"
+                  value={correctionEngine}
+                  onChange={(e) => {
+                    const v = e.target.value as 'naver' | 'claude'
+                    setCorrectionEngine(v)
+                    localStorage.setItem('subtitle:correctionEngine', v)
+                  }}
+                >
+                  <option value="naver">네이버 맞춤법</option>
+                  <option value="claude">Claude 교정</option>
+                </select>
                 <button className="btn btn--primary btn--lg" onClick={handleStart}>
                   자막 생성 시작
                 </button>

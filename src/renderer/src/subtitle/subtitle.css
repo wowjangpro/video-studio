@@ -100,6 +100,17 @@
   gap: 12px;
 }
 
+.sub-file-preview__engine-select {
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 /* ===== Resizable Layout ===== */
 .sub-resizable-layout {
   flex: 1;

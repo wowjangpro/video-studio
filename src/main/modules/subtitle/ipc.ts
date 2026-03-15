@@ -99,7 +99,7 @@ export function registerSubtitleIpc(): void {
     return result.canceled ? null : result.filePaths[0]
   })
 
-  ipcMain.handle('subtitle:start-process', async (_event, filePath: string, modelSize?: string, description?: string) => {
+  ipcMain.handle('subtitle:start-process', async (_event, filePath: string, modelSize?: string, description?: string, aiEngine?: string) => {
     try {
       // 1단계: 오디오 추출
       sendToRenderer('subtitle:progress', {
@@ -234,15 +234,18 @@ export function registerSubtitleIpc(): void {
         isEdited: boolean
       }>
 
+      const useClaude = aiEngine === 'claude'
       try {
+        const correctionLabel = useClaude ? 'Claude 음성인식 교정' : '네이버 맞춤법 검사기'
         sendToRenderer('subtitle:progress', {
           stage: 'correcting',
           percent: 0,
-          message: '맞춤법 교정 중... (네이버 맞춤법 검사기)'
+          message: `교정 중... (${correctionLabel})`
         })
 
+        const spellcheckScript = useClaude ? 'spellcheck_claude.py' : 'spellcheck.py'
         const corrected = await new Promise<Array<{ id: number; text: string }>>((resolve, reject) => {
-          spellcheckProcess = runPythonScript('subtitle', 'spellcheck.py', [], (data) => {
+          spellcheckProcess = runPythonScript('subtitle', spellcheckScript, [], (data) => {
             const status = data.status as string
             if (status === 'progress') {
               const processed = data.processed as number
@@ -260,7 +263,10 @@ export function registerSubtitleIpc(): void {
             }
           })
 
-          const input = JSON.stringify({ segments: segments.map((s) => ({ id: s.id, text: s.text })) })
+          const input = JSON.stringify({
+            segments: segments.map((s) => ({ id: s.id, text: s.text })),
+            description: description || ''
+          })
           spellcheckProcess.stdin?.write(input)
           spellcheckProcess.stdin?.end()
 
