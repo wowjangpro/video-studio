@@ -66,11 +66,10 @@ export default function SubtitleModule(): JSX.Element {
       setSegments(segments.map((s) => ({ ...s, isEdited: false })))
     })
 
-    const unsubComplete = api.onProcessComplete((segments) => {
-      setSegments(segments.map((s) => ({ ...s, isEdited: false })))
-      const fp = useSubtitleStore.getState().filePath
-      if (fp) {
-        setSrtPath(fp.replace(/\.[^.]+$/, '.srt'))
+    const unsubComplete = api.onProcessComplete((data) => {
+      setSegments(data.segments.map((s) => ({ ...s, isEdited: false })))
+      if (data.srtPath) {
+        setSrtPath(data.srtPath)
       }
     })
 

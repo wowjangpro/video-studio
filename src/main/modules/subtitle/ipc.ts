@@ -317,7 +317,7 @@ export function registerSubtitleIpc(): void {
         message: `처리가 완료되었습니다! (${srtPath})`
       })
 
-      sendToRenderer('subtitle:complete', finalSegments)
+      sendToRenderer('subtitle:complete', { segments: finalSegments, srtPath })
     } catch (err) {
       console.error('[subtitle:start-process error]', err)
       const message = err instanceof Error ? err.message : '알 수 없는 오류가 발생했습니다.'
