@@ -105,7 +105,7 @@ export default function SubtitleModule(): JSX.Element {
 
   const [correctionEngine, setCorrectionEngine] = useState<'naver' | 'claude'>(() => {
     const saved = localStorage.getItem('subtitle:correctionEngine')
-    return saved === 'claude' ? 'claude' : 'naver'
+    return saved === 'naver' ? 'naver' : 'claude'
   })
   const [currentView, setCurrentView] = useState<'subtitle' | 'description'>('subtitle')
 

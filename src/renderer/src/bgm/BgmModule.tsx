@@ -59,7 +59,7 @@ export default function BgmModule(): JSX.Element {
 
   const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(() => {
     const saved = localStorage.getItem('bgm:aiEngine')
-    return saved === 'claude' ? 'claude' : 'ollama'
+    return saved === 'ollama' ? 'ollama' : 'claude'
   })
 
   const handleAnalyze = useCallback(async () => {
