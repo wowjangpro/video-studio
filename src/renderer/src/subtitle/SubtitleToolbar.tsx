@@ -21,6 +21,9 @@ export function SubtitleToolbar(): JSX.Element {
   const [searchQuery, setSearchQuery] = useState('')
   const [translating, setTranslating] = useState(false)
   const [translateMsg, setTranslateMsg] = useState('')
+  const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(
+    () => (localStorage.getItem('subtitle:aiEngine') as 'ollama' | 'claude') || 'ollama'
+  )
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('subtitle-search', { detail: searchQuery }))
@@ -58,8 +61,8 @@ export function SubtitleToolbar(): JSX.Element {
       end: s.end,
       text: s.correctedText || s.text
     }))
-    await window.electronAPI.subtitle.translateSubtitles(input, lang, srtPath, videoDescription)
-  }, [segments, srtPath, translating, videoDescription])
+    await window.electronAPI.subtitle.translateSubtitles(input, lang, srtPath, videoDescription, aiEngine)
+  }, [segments, srtPath, translating, videoDescription, aiEngine])
 
   const hasEn = translatedSegments.en.length > 0
   const hasJp = translatedSegments.jp.length > 0
@@ -101,6 +104,18 @@ export function SubtitleToolbar(): JSX.Element {
           value={videoDescription}
           onChange={(e) => setVideoDescription(e.target.value)}
         />
+        <select
+          className="sub-toolbar__engine-select"
+          value={aiEngine}
+          onChange={(e) => {
+            const v = e.target.value as 'ollama' | 'claude'
+            setAiEngine(v)
+            localStorage.setItem('subtitle:aiEngine', v)
+          }}
+        >
+          <option value="ollama">Ollama</option>
+          <option value="claude">Claude</option>
+        </select>
         <button className="btn btn--sm" onClick={() => handleTranslate('en')} disabled={translating}>
           {hasEn ? '영어 재번역' : '영어 번역'}
         </button>

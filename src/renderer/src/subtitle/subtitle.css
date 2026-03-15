@@ -313,6 +313,17 @@
   flex-shrink: 0;
 }
 
+.sub-toolbar__engine-select {
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 .sub-editor__info {
   font-size: 13px;
   color: var(--text-secondary);

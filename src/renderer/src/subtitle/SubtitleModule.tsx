@@ -213,7 +213,7 @@ export default function SubtitleModule(): JSX.Element {
                 <li><strong>음성인식</strong> — VAD로 음성 구간을 감지하고 자막을 생성합니다 <span className="module-guide__model">Silero VAD + faster-whisper (large-v3)</span></li>
                 <li><strong>맞춤법 교정</strong> — 생성된 자막의 맞춤법을 자동 교정합니다 <span className="module-guide__model">네이버 맞춤법 검사기</span></li>
                 <li><strong>편집 및 저장</strong> — 자막을 수정하고 SRT 파일로 저장합니다</li>
-                <li><strong>번역 (선택)</strong> — 영어/일본어로 자막을 번역합니다 <span className="module-guide__model">Qwen2.5:14B (Ollama)</span></li>
+                <li><strong>번역 (선택)</strong> — 영어/일본어로 자막을 번역합니다 <span className="module-guide__model">Qwen2.5:14B (Ollama) 또는 Claude</span></li>
               </ol>
             </div>
           </div>
