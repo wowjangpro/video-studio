@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 python/shared-venv/
 python/bgm-venv/
+python/bgm/ACE-Step-1.5/
 
 # Node.js / Electron
 node_modules/
