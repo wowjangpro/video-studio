@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { useBgmStore } from './bgm-store'
 import FileDropZone from './FileDropZone'
 import VideoPlayer from './VideoPlayer'
@@ -57,13 +57,18 @@ export default function BgmModule(): JSX.Element {
     }
   }, [setProgress, setSceneDescription, setBgm, setError])
 
+  const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(() => {
+    const saved = localStorage.getItem('bgm:aiEngine')
+    return saved === 'claude' ? 'claude' : 'ollama'
+  })
+
   const handleAnalyze = useCallback(async () => {
     const { filePath, rangeStart, rangeEnd, musicPreference } = useBgmStore.getState()
     if (!filePath) return
 
     setProgress('analyzing', -1, '영상 분석을 준비하고 있습니다...')
-    await window.electronAPI.bgm.analyzeVideo(filePath, rangeStart, rangeEnd, musicPreference)
-  }, [setProgress])
+    await window.electronAPI.bgm.analyzeVideo(filePath, rangeStart, rangeEnd, musicPreference, aiEngine)
+  }, [setProgress, aiEngine])
 
   const handleGenerate = useCallback(async () => {
     const { filePath, rangeStart, rangeEnd, musicPrompt, generateCount } = useBgmStore.getState()
@@ -97,7 +102,7 @@ export default function BgmModule(): JSX.Element {
               <ol className="module-guide__steps">
                 <li><strong>영상 선택</strong> — BGM을 만들 영상 파일을 선택합니다</li>
                 <li><strong>구간 설정</strong> — BGM을 적용할 영상 구간을 지정합니다</li>
-                <li><strong>장면 분석</strong> — AI가 영상의 분위기와 장면을 분석합니다 <span className="module-guide__model">LLaMA 3.2 Vision:11B (Ollama)</span></li>
+                <li><strong>장면 분석</strong> — AI가 영상의 분위기와 장면을 분석합니다 <span className="module-guide__model">LLaMA 3.2 Vision + Qwen2.5:14B (Ollama) 또는 Claude</span></li>
                 <li><strong>프롬프트 편집</strong> — 분석된 음악 프롬프트를 확인하고 수정합니다</li>
                 <li><strong>BGM 생성</strong> — AI가 영상에 맞는 배경음악을 생성합니다 <span className="module-guide__model">ACE-Step 1.5</span></li>
                 <li><strong>미리듣기 및 저장</strong> — 생성된 BGM을 들어보고 선택합니다</li>
@@ -109,7 +114,7 @@ export default function BgmModule(): JSX.Element {
         {stage === 'idle' && filePath && (
           <div className="bgm-module__editor">
             <VideoPlayer />
-            <StyleInput onAnalyze={handleAnalyze} />
+            <StyleInput onAnalyze={handleAnalyze} aiEngine={aiEngine} onAiEngineChange={(v) => { setAiEngine(v); localStorage.setItem('bgm:aiEngine', v) }} />
           </div>
         )}
 
