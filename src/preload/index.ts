@@ -196,8 +196,8 @@ const subtitle = {
     ipcRenderer.on('subtitle:correction-complete', handler)
     return (): void => { ipcRenderer.removeListener('subtitle:correction-complete', handler) }
   },
-  onProcessComplete: (callback: (segments: SubtitleSegmentData[]) => void) => {
-    const handler = (_: unknown, segments: SubtitleSegmentData[]): void => callback(segments)
+  onProcessComplete: (callback: (data: { segments: SubtitleSegmentData[]; srtPath: string }) => void) => {
+    const handler = (_: unknown, data: { segments: SubtitleSegmentData[]; srtPath: string }): void => callback(data)
     ipcRenderer.on('subtitle:complete', handler)
     return (): void => { ipcRenderer.removeListener('subtitle:complete', handler) }
   },
