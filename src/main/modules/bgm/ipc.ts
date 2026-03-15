@@ -66,7 +66,11 @@ export function registerBgmIpc(): void {
             activeProcess = null
           }
         },
-        () => {}
+        (stderr) => {
+          if (stderr.includes('Traceback') || stderr.includes('Error')) {
+            sendToRenderer('bgm:error', stderr)
+          }
+        }
       )
 
       activeProcess.on('exit', (code) => {
@@ -122,7 +126,11 @@ export function registerBgmIpc(): void {
             activeProcess = null
           }
         },
-        () => {}
+        (stderr) => {
+          if (stderr.includes('Traceback') || stderr.includes('Error')) {
+            sendToRenderer('bgm:error', stderr)
+          }
+        }
       )
 
       activeProcess.on('exit', (code) => {
