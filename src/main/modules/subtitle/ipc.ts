@@ -522,7 +522,8 @@ export function registerSubtitleIpc(): void {
       segments: Array<{ id: number; start: number; end: number; text: string }>,
       lang: string,
       baseSrtPath: string,
-      description?: string
+      description?: string,
+      aiEngine?: string
     ) => {
       // 이전 번역 프로세스가 있으면 종료
       if (translateProcess) {
@@ -530,18 +531,24 @@ export function registerSubtitleIpc(): void {
         translateProcess = null
       }
 
-      const check = resourceManager.acquire('subtitle', ['ollama'])
-      if (check.conflict) {
-        sendToRenderer('subtitle:translate-progress', { percent: -1, message: check.message || '리소스 충돌' })
-        return null
+      const useClaude = aiEngine === 'claude'
+
+      if (!useClaude) {
+        const check = resourceManager.acquire('subtitle', ['ollama'])
+        if (check.conflict) {
+          sendToRenderer('subtitle:translate-progress', { percent: -1, message: check.message || '리소스 충돌' })
+          return null
+        }
       }
 
       try {
         const langLabel = lang === 'en' ? '영어' : '일본어'
-        sendToRenderer('subtitle:translate-progress', { percent: 0, message: `${langLabel} 번역 중...` })
+        const engineLabel = useClaude ? 'Claude' : 'Ollama'
+        sendToRenderer('subtitle:translate-progress', { percent: 0, message: `${langLabel} 번역 중... (${engineLabel})` })
 
+        const scriptName = useClaude ? 'translate_claude.py' : 'translate.py'
         const translated = await new Promise<Array<{ id: number; text: string }>>((resolve, reject) => {
-          translateProcess = runPythonScript('subtitle', 'translate.py', [], (data) => {
+          translateProcess = runPythonScript('subtitle', scriptName, [], (data) => {
             const status = data.status as string
             if (status === 'progress') {
               const processed = data.processed as number
@@ -600,7 +607,9 @@ export function registerSubtitleIpc(): void {
         sendToRenderer('subtitle:translate-progress', { percent: -1, message: `번역 실패: ${message}` })
         return null
       } finally {
-        resourceManager.release('subtitle')
+        if (!useClaude) {
+          resourceManager.release('subtitle')
+        }
       }
     }
   )

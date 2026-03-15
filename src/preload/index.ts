@@ -172,9 +172,10 @@ const subtitle = {
     segments: Array<{ id: number; start: number; end: number; text: string }>,
     lang: string,
     baseSrtPath: string,
-    description?: string
+    description?: string,
+    aiEngine?: string
   ): Promise<string | null> =>
-    ipcRenderer.invoke('subtitle:translate-subtitles', segments, lang, baseSrtPath, description),
+    ipcRenderer.invoke('subtitle:translate-subtitles', segments, lang, baseSrtPath, description, aiEngine),
 
   onProgress: (callback: (data: ProgressData) => void) => {
     const handler = (_: unknown, data: ProgressData): void => callback(data)
