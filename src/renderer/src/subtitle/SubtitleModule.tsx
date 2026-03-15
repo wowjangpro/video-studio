@@ -103,6 +103,12 @@ export default function SubtitleModule(): JSX.Element {
     }
   }, [setProgress, setChunkProgress, addSegment, setSegments, setError, setSrtPath, setFile, setTranslatedSegments])
 
+  const [correctionEngine, setCorrectionEngine] = useState<'naver' | 'claude'>(() => {
+    const saved = localStorage.getItem('subtitle:correctionEngine')
+    return saved === 'claude' ? 'claude' : 'naver'
+  })
+  const [currentView, setCurrentView] = useState<'subtitle' | 'description'>('subtitle')
+
   const handleStart = useCallback(async () => {
     if (!filePath || !window.electronAPI) return
     const desc = useSubtitleStore.getState().videoDescription
@@ -127,14 +133,8 @@ export default function SubtitleModule(): JSX.Element {
       result.segments.map((s) => ({ ...s, isEdited: false }))
     )
   }, [filePath, loadComplete])
-
-  const [currentView, setCurrentView] = useState<'subtitle' | 'description'>('subtitle')
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [urlLoading, setUrlLoading] = useState(false)
-  const [correctionEngine, setCorrectionEngine] = useState<'naver' | 'claude'>(() => {
-    const saved = localStorage.getItem('subtitle:correctionEngine')
-    return saved === 'claude' ? 'claude' : 'naver'
-  })
 
   const handleDownload = useCallback(async () => {
     if (!youtubeUrl.trim() || !window.electronAPI) return
