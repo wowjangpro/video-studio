@@ -85,23 +85,16 @@ export default function VideoPreview(): JSX.Element {
     const onPlaying = (): void => {
       pendingSeekRef.current = false
       setVideoPlaying(true)
-      console.log(`[autocut:video] playing → videoPlaying=true`)
     }
     const onPause = (): void => {
       setVideoPlaying(false)
       if (!video.ended && !autoPlayNextRef.current) {
         setUserPlayback(false)
-        console.log(`[autocut:video] pause → videoPlaying=false, userPlayback=false`)
-      } else {
-        console.log(`[autocut:video] pause → videoPlaying=false (userPlayback 유지, ended=${video.ended} autoNext=${autoPlayNextRef.current})`)
       }
     }
     const onPlay = (): void => {
       if (!autoPlayNextRef.current && !useAutocutStore.getState().previewMode) {
         setUserPlayback(true)
-        console.log(`[autocut:video] play → userPlayback=true`)
-      } else {
-        console.log(`[autocut:video] play → userPlayback 유지 (autoNext=${autoPlayNextRef.current} preview=${useAutocutStore.getState().previewMode})`)
       }
     }
     video.addEventListener('playing', onPlaying)

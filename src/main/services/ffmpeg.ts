@@ -14,9 +14,7 @@ export function getVideoDuration(filePath: string): Promise<number> {
     let output = ''
     proc.stdout.on('data', (d) => { output += d.toString() })
     proc.on('close', () => {
-      const dur = parseFloat(output.trim()) || 0
-      console.log(`[ffmpeg] duration: ${basename(filePath)} → ${dur.toFixed(1)}s`)
-      resolve(dur)
+      resolve(parseFloat(output.trim()) || 0)
     })
     proc.on('error', (err) => {
       console.error(`[ffmpeg] ffprobe error: ${err.message}`)

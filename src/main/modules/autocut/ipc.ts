@@ -173,7 +173,6 @@ function checkResumeInfo(folderPath: string, files: FileInfo[]): ResumeInfo | nu
   const hasAnalysisCache = existsSync(analysisCachePath)
 
   if (hasAnalysisCache) {
-    console.log(`[autocut:resume] 분석 캐시 발견: ${analysisCachePath}`)
   }
 
   if (!existsSync(progressPath)) {
@@ -257,7 +256,6 @@ function checkResumeInfo(folderPath: string, files: FileInfo[]): ResumeInfo | nu
       } catch { /* skip */ }
     }
 
-    console.log(`[autocut:resume] 진행 파일 감지: ${completedFiles}/${files.length} 파일 완료`)
     return {
       canResume: true,
       completedFiles,
@@ -266,14 +264,12 @@ function checkResumeInfo(folderPath: string, files: FileInfo[]): ResumeInfo | nu
       hasAnalysisCache
     }
   } catch (e) {
-    console.log(`[autocut:resume] 진행 파일 파싱 실패: ${e}`)
     return null
   }
 }
 
 export function registerAutocutIpc(): void {
   ipcMain.handle('autocut:select-folder', async () => {
-    console.log('[autocut:ipc] select-folder 호출')
     const { BrowserWindow } = await import('electron')
     const win = BrowserWindow.getAllWindows()[0]
     if (!win) return null
@@ -282,26 +278,21 @@ export function registerAutocutIpc(): void {
       properties: ['openDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) {
-      console.log('[autocut:ipc] select-folder: 취소됨')
       return null
     }
     const folderPath = result.filePaths[0]
-    console.log(`[autocut:ipc] select-folder: ${folderPath}`)
     const files = await scanVideoFiles(folderPath)
     const resumeInfo = checkResumeInfo(folderPath, files)
     return { folderPath, files, resumeInfo }
   })
 
   ipcMain.handle('autocut:scan-folder', async (_event, folderPath: string) => {
-    console.log(`[autocut:ipc] scan-folder: ${folderPath}`)
     try {
       const stat = statSync(folderPath)
       if (!stat.isDirectory()) {
-        console.log('[autocut:ipc] scan-folder: 디렉토리가 아님')
         return null
       }
     } catch {
-      console.log('[autocut:ipc] scan-folder: 경로 접근 실패')
       return null
     }
     const files = await scanVideoFiles(folderPath)
@@ -310,7 +301,6 @@ export function registerAutocutIpc(): void {
   })
 
   ipcMain.handle('autocut:get-thumbnail', async (_event, filePath: string) => {
-    console.log(`[autocut:ipc] get-thumbnail: ${filePath.split('/').pop()}`)
     return await generateThumbnail(filePath)
   })
 
@@ -324,12 +314,10 @@ export function registerAutocutIpc(): void {
       const videoMtime = statSync(filePath).mtimeMs
       const peaksMtime = statSync(peaksPath).mtimeMs
       if (peaksMtime >= videoMtime) {
-        console.log(`[autocut:ipc] get-waveform (캐시): ${name}`)
         return JSON.parse(readFileSync(peaksPath, 'utf-8'))
       }
     }
 
-    console.log(`[autocut:ipc] get-waveform (추출): ${name}`)
     mkdirSync(thumbDir, { recursive: true })
     const peaks = await extractWaveformPeaks(filePath)
     writeFileSync(peaksPath, JSON.stringify(peaks))
@@ -339,11 +327,8 @@ export function registerAutocutIpc(): void {
   ipcMain.handle(
     'autocut:start-analysis',
     async (_event, folderPath: string, options: Record<string, unknown>) => {
-      console.log(`[autocut:ipc] start-analysis: ${folderPath}`)
-      console.log(`[autocut:ipc] options:`, JSON.stringify(options))
 
       if (analysisProcess) {
-        console.log('[autocut:ipc] 기존 분석 프로세스 종료')
         killProcessGroup(analysisProcess)
         analysisProcess = null
       }
@@ -374,16 +359,13 @@ export function registerAutocutIpc(): void {
               })
               // LLM 오류로 Python이 자체 일시정지(SIGSTOP)한 경우 → UI도 일시정지 표시
               if (data.llm_error) {
-                console.log('[autocut] LLM 오류 감지 — Python 자체 일시정지됨')
                 sendToRenderer('autocut:paused')
               }
               break
             case 'window_result':
-              console.log(`[autocut] window_result: ${data.decision} [${data.label}] score=${data.score} (${data.globalStart}~${data.globalEnd})`)
               sendToRenderer('autocut:window-result', data)
               break
             case 'file_complete':
-              console.log(`[autocut] file_complete: #${data.fileIndex} keep=${data.keepCount} drop=${data.dropCount}`)
               sendToRenderer('autocut:file-complete', {
                 fileIndex: data.fileIndex,
                 filePath: data.filePath,
@@ -416,7 +398,6 @@ export function registerAutocutIpc(): void {
         (stderr) => {
           // Python 모듈 디버그 로그는 콘솔에만 출력
           if (/^\[(?:analyze|claude|stage[12]|storyboard|stt|scene_detector|vad|merger)\]/.test(stderr)) {
-            console.log(`[autocut:python:debug] ${stderr}`)
             return
           }
           const lower = stderr.toLowerCase()
@@ -430,13 +411,11 @@ export function registerAutocutIpc(): void {
             sendToRenderer('autocut:error', stderr)
             errorSent = true
           } else {
-            console.log(`[autocut:python:stderr] ${stderr.slice(0, 300)}`)
           }
         }
       )
 
       analysisProcess.on('close', (code) => {
-        console.log(`[autocut] process closed, code=${code}`)
         const wasActive = analysisProcess !== null
         if (code !== 0 && !errorSent && wasActive) {
           sendToRenderer('autocut:error', `분석 프로세스가 종료되었습니다 (코드: ${code})`)
@@ -451,7 +430,6 @@ export function registerAutocutIpc(): void {
   )
 
   ipcMain.handle('autocut:pause-analysis', async () => {
-    console.log('[autocut:ipc] pause-analysis')
     if (analysisProcess && analysisProcess.pid) {
       killProcessGroup(analysisProcess, 'SIGSTOP')
       sendToRenderer('autocut:paused')
@@ -459,7 +437,6 @@ export function registerAutocutIpc(): void {
   })
 
   ipcMain.handle('autocut:resume-analysis', async () => {
-    console.log('[autocut:ipc] resume-analysis')
     if (analysisProcess && analysisProcess.pid) {
       killProcessGroup(analysisProcess, 'SIGCONT')
       sendToRenderer('autocut:resumed')
@@ -467,7 +444,6 @@ export function registerAutocutIpc(): void {
   })
 
   ipcMain.handle('autocut:cancel-analysis', async () => {
-    console.log('[autocut:ipc] cancel-analysis')
     if (analysisProcess) {
       const proc = analysisProcess
       analysisProcess = null
@@ -483,14 +459,11 @@ export function registerAutocutIpc(): void {
     const autocutDir = getAutocutDir(folderPath)
     const progressPath = join(autocutDir, PROGRESS_FILENAME)
     const analysisCachePath = join(autocutDir, ANALYSIS_CACHE_FILENAME)
-    console.log(`[autocut:ipc] delete-progress: ${progressPath}`)
     if (existsSync(progressPath)) {
       unlinkSync(progressPath)
-      console.log('[autocut:ipc] delete-progress: 진행 파일 삭제')
     }
     if (existsSync(analysisCachePath)) {
       unlinkSync(analysisCachePath)
-      console.log('[autocut:ipc] delete-progress: 분석 캐시 삭제')
     }
   })
 
@@ -498,10 +471,8 @@ export function registerAutocutIpc(): void {
     let srtPath: string
 
     if (srtFilePath) {
-      console.log(`[autocut:ipc] load-srt (직접): ${srtFilePath}`)
       srtPath = srtFilePath
     } else {
-      console.log('[autocut:ipc] load-srt 호출')
       const { BrowserWindow } = await import('electron')
       const win = BrowserWindow.getAllWindows()[0]
       if (!win) return null
@@ -511,27 +482,22 @@ export function registerAutocutIpc(): void {
         properties: ['openFile']
       })
       if (result.canceled || result.filePaths.length === 0) {
-        console.log('[autocut:ipc] load-srt: 취소됨')
         return null
       }
       srtPath = result.filePaths[0]
     }
 
     if (!existsSync(srtPath)) {
-      console.log(`[autocut:ipc] load-srt: 파일 없음 ${srtPath}`)
       return null
     }
-    console.log(`[autocut:ipc] load-srt: ${srtPath}`)
     const content = readFileSync(srtPath, 'utf-8')
     const segments = parseSrtFile(content)
-    console.log(`[autocut:ipc] load-srt: ${segments.length}개 세그먼트 파싱 완료`)
     return { srtPath, segments }
   })
 
   ipcMain.handle(
     'autocut:save-srt',
     async (_event, segments: { globalStart: number; globalEnd: number; label: string; score: number | string }[], filePath?: string) => {
-      console.log(`[autocut:ipc] save-srt: ${segments.length}개 세그먼트`)
       if (!filePath) {
         const { BrowserWindow } = await import('electron')
         const win = BrowserWindow.getAllWindows()[0]
@@ -557,7 +523,6 @@ export function registerAutocutIpc(): void {
       }
 
       writeFileSync(filePath, lines.join('\n'), 'utf-8')
-      console.log(`[autocut:ipc] save-srt: 저장 완료 → ${filePath}`)
       return filePath
     }
   )

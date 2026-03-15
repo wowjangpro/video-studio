@@ -31,15 +31,11 @@ export function runPythonScript(
   const pythonPath = getPythonPath(module)
   const scriptPath = getScriptPath(module, script)
 
-  console.log(`[python:${module}] spawn: ${pythonPath} ${scriptPath}`)
-  console.log(`[python:${module}] args: ${args.join(' ')}`)
-
   if (is.dev && !existsSync(pythonPath)) {
-    console.error(`[python:${module}] ERROR: python not found at ${pythonPath}`)
-    // onError는 spawn 'error' 이벤트에서 호출됨 — 여기서는 로그만 남김
+    console.error(`[python:${module}] python not found: ${pythonPath}`)
   }
   if (!existsSync(scriptPath)) {
-    console.error(`[python:${module}] ERROR: script not found at ${scriptPath}`)
+    console.error(`[python:${module}] script not found: ${scriptPath}`)
   }
 
   const proc = spawn(pythonPath, [scriptPath, ...args], {
@@ -47,8 +43,6 @@ export function runPythonScript(
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
     detached: true
   })
-
-  console.log(`[python:${module}] process started, pid=${proc.pid}`)
 
   const decoder = new StringDecoder('utf8')
   let buffer = ''
@@ -62,10 +56,9 @@ export function runPythonScript(
       if (!line.trim()) continue
       try {
         const data = JSON.parse(line)
-        console.log(`[python:${module}:stdout] ${data.type}`, data.type === 'progress' ? `${data.stage} ${data.percent}%` : '')
         onData?.(data)
       } catch {
-        console.log(`[python:${module}:stdout:raw] ${line.slice(0, 200)}`)
+        // non-JSON stdout 무시
       }
     }
   })
@@ -73,7 +66,6 @@ export function runPythonScript(
   proc.stderr?.on('data', (chunk: Buffer) => {
     const msg = chunk.toString().trim()
     if (msg) {
-      console.log(`[python:${module}:stderr] ${msg.slice(0, 500)}`)
       onError?.(msg)
     }
   })
@@ -84,7 +76,9 @@ export function runPythonScript(
   })
 
   proc.on('close', (code) => {
-    console.log(`[python:${module}] process exited, code=${code}`)
+    if (code !== 0) {
+      console.error(`[python:${module}] exited with code ${code}`)
+    }
   })
 
   return proc
