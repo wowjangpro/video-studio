@@ -35,19 +35,28 @@ export function registerBgmIpc(): void {
 
   ipcMain.handle(
     'bgm:analyze-video',
-    async (_event, filePath: string, rangeStart: number, rangeEnd: number, preference: string) => {
+    async (_event, filePath: string, rangeStart: number, rangeEnd: number, preference: string, aiEngine?: string) => {
       killActiveProcess()
 
-      const conflict = resourceManager.acquire('bgm', ['ollama'])
-      if (conflict.conflict) {
-        sendToRenderer('bgm:error', conflict.message)
-        return
+      const useClaude = aiEngine === 'claude'
+
+      if (!useClaude) {
+        const conflict = resourceManager.acquire('bgm', ['ollama'])
+        if (conflict.conflict) {
+          sendToRenderer('bgm:error', conflict.message)
+          return
+        }
       }
+
+      const script = useClaude ? 'analyze_claude.py' : 'generate.py'
+      const args = useClaude
+        ? [filePath, String(rangeStart), String(rangeEnd), preference || '']
+        : ['analyze', filePath, String(rangeStart), String(rangeEnd), preference || '']
 
       activeProcess = runPythonScript(
         'bgm',
-        'generate.py',
-        ['analyze', filePath, String(rangeStart), String(rangeEnd), preference || ''],
+        script,
+        args,
         (data) => {
           const type = data.type as string
           if (type === 'progress') {
@@ -58,11 +67,11 @@ export function registerBgmIpc(): void {
             })
           } else if (type === 'analyzed') {
             sendToRenderer('bgm:analyze-complete', data.scene_description, data.music_prompt || '')
-            resourceManager.release('bgm')
+            if (!useClaude) resourceManager.release('bgm')
             activeProcess = null
           } else if (type === 'error') {
             sendToRenderer('bgm:error', data.message)
-            resourceManager.release('bgm')
+            if (!useClaude) resourceManager.release('bgm')
             activeProcess = null
           }
         },
@@ -79,7 +88,7 @@ export function registerBgmIpc(): void {
           sendToRenderer('bgm:error', `프로세스가 비정상 종료되었습니다 (code: ${code})`)
         }
         activeProcess = null
-        if (wasActive) {
+        if (wasActive && !useClaude) {
           resourceManager.release('bgm')
         }
       })

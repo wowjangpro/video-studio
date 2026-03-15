@@ -227,8 +227,8 @@ const subtitle = {
 // ── BGM API ──
 const bgm = {
   selectFile: (): Promise<string | null> => ipcRenderer.invoke('bgm:select-file'),
-  analyzeVideo: (filePath: string, rangeStart: number, rangeEnd: number, preference: string): Promise<void> =>
-    ipcRenderer.invoke('bgm:analyze-video', filePath, rangeStart, rangeEnd, preference),
+  analyzeVideo: (filePath: string, rangeStart: number, rangeEnd: number, preference: string, aiEngine?: string): Promise<void> =>
+    ipcRenderer.invoke('bgm:analyze-video', filePath, rangeStart, rangeEnd, preference, aiEngine),
   generateBgm: (filePath: string, rangeStart: number, rangeEnd: number, prompt: string, count: number): Promise<void> =>
     ipcRenderer.invoke('bgm:generate-bgm', filePath, rangeStart, rangeEnd, prompt, count),
   cancelGenerate: (): Promise<void> => ipcRenderer.invoke('bgm:cancel-generate'),

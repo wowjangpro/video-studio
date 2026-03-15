@@ -195,7 +195,23 @@
 .style-input__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.style-input__footer .style-input__info {
+  margin-right: auto;
+}
+
+.style-input__engine-select {
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .style-input__info {
