@@ -23,7 +23,7 @@ export function SubtitleToolbar(): JSX.Element {
   const [translateMsg, setTranslateMsg] = useState('')
   const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(() => {
     const saved = localStorage.getItem('subtitle:aiEngine')
-    return saved === 'claude' ? 'claude' : 'ollama'
+    return saved === 'ollama' ? 'ollama' : 'claude'
   })
 
   useEffect(() => {
