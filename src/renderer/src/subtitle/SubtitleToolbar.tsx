@@ -21,9 +21,10 @@ export function SubtitleToolbar(): JSX.Element {
   const [searchQuery, setSearchQuery] = useState('')
   const [translating, setTranslating] = useState(false)
   const [translateMsg, setTranslateMsg] = useState('')
-  const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(
-    () => (localStorage.getItem('subtitle:aiEngine') as 'ollama' | 'claude') || 'ollama'
-  )
+  const [aiEngine, setAiEngine] = useState<'ollama' | 'claude'>(() => {
+    const saved = localStorage.getItem('subtitle:aiEngine')
+    return saved === 'claude' ? 'claude' : 'ollama'
+  })
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('subtitle-search', { detail: searchQuery }))

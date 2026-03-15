@@ -28,7 +28,6 @@ def call_claude(prompt: str, timeout: int = 300) -> str:
         "--model", "sonnet",
         "--output-format", "json",
         "--no-session-persistence",
-        "--dangerously-skip-permissions",
     ]
     try:
         result = subprocess.run(
@@ -150,13 +149,12 @@ def main():
             "total": total,
         }, ensure_ascii=False), flush=True)
 
-    # 누락된 세그먼트 개별 재시도
+    # 누락된 세그먼트 일괄 재시도
     missing = [s for s in segments if s["id"] not in all_results]
     if missing:
-        for s in missing:
-            results = translate_batch([s], lang, description)
-            for r in results:
-                all_results[r["id"]] = r["text"]
+        results = translate_batch(missing, lang, description)
+        for r in results:
+            all_results[r["id"]] = r["text"]
 
     final = [{"id": s["id"], "text": all_results.get(s["id"], s["text"])} for s in segments]
     print(json.dumps({"status": "done", "segments": final}, ensure_ascii=False), flush=True)

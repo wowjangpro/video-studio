@@ -347,6 +347,14 @@ export function registerSubtitleIpc(): void {
       youtubeProcess.kill('SIGTERM')
       youtubeProcess = null
     }
+    if (translateProcess) {
+      translateProcess.kill('SIGTERM')
+      translateProcess = null
+    }
+    if (translateTextProcess) {
+      translateTextProcess.kill('SIGTERM')
+      translateTextProcess = null
+    }
     resourceManager.release('subtitle')
   })
 
