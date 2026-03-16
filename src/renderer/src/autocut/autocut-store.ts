@@ -73,6 +73,7 @@ interface AppState {
 
   keepSegments: KeepSegment[]
   srtPath: string | null
+  edlPath: string | null
   errorMessage: string | null
 
   timelineZoom: number
@@ -101,7 +102,7 @@ interface AppState {
   setPaused: (paused: boolean) => void
   setProgress: (stage: ProcessStage, percent: number, message: string) => void
   addWindowResult: (result: WindowResult) => void
-  setAnalysisComplete: (keepSegments: KeepSegment[], srtPath: string) => void
+  setAnalysisComplete: (keepSegments: KeepSegment[], srtPath: string, edlPath?: string | null) => void
   setError: (message: string) => void
   setTimelineZoom: (zoom: number) => void
   setTimelineScroll: (scrollLeft: number) => void
@@ -132,6 +133,7 @@ const initialState = {
   paused: false,
   keepSegments: [] as KeepSegment[],
   srtPath: null as string | null,
+  edlPath: null as string | null,
   errorMessage: null as string | null,
   timelineZoom: 10,
   timelineScrollLeft: 0,
@@ -167,6 +169,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
       message: '',
       keepSegments: [],
       srtPath: null,
+      edlPath: null,
       errorMessage: null,
       resumeInfo: resumeInfo ?? null
     })
@@ -265,8 +268,8 @@ export const useAutocutStore = create<AppState>((set, get) => ({
     }
   },
 
-  setAnalysisComplete: (keepSegments, srtPath) =>
-    set({ stage: 'complete', percent: 100, message: '분석 완료', keepSegments, srtPath, analysisFileIndex: -1 }),
+  setAnalysisComplete: (keepSegments, srtPath, edlPath) =>
+    set({ stage: 'complete', percent: 100, message: '분석 완료', keepSegments, srtPath, edlPath: edlPath || null, analysisFileIndex: -1 }),
 
   setError: (message) => set({ stage: 'error', errorMessage: message, analysisFileIndex: -1 }),
 
