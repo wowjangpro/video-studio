@@ -16,6 +16,7 @@ export default function VideoTrack({
 }: VideoTrackProps): JSX.Element {
   const analysisFileIndex = useAutocutStore((s) => s.analysisFileIndex)
   const stage = useAutocutStore((s) => s.stage)
+  const excludedFiles = useAutocutStore((s) => s.excludedFiles)
   const isAnalyzing = stage !== 'idle' && stage !== 'complete' && stage !== 'error'
 
   return (
@@ -28,10 +29,11 @@ export default function VideoTrack({
           if (width < 1) return null
           const isSelected = i === selectedFileIndex
           const isCurrentAnalysis = isAnalyzing && i === analysisFileIndex
+          const isExcluded = excludedFiles.has(i)
           return (
             <div
               key={file.path}
-              className={`video-track__clip${isSelected ? ' video-track__clip--selected' : ''}${isCurrentAnalysis ? ' video-track__clip--analyzing' : ''}`}
+              className={`video-track__clip${isSelected ? ' video-track__clip--selected' : ''}${isCurrentAnalysis ? ' video-track__clip--analyzing' : ''}${isExcluded ? ' video-track__clip--excluded' : ''}`}
               style={{ left, width }}
               onClick={() => onClickClip(i, file.cumulativeOffset)}
             >
