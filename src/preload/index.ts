@@ -125,7 +125,7 @@ const autocut = {
     ipcRenderer.on('autocut:file-complete', handler)
     return (): void => { ipcRenderer.removeListener('autocut:file-complete', handler) }
   },
-  onAnalysisComplete: (callback: (data: { keepSegments: KeepSegmentData[]; srtPath: string; totalKeep: number; totalDuration: number }) => void) => {
+  onAnalysisComplete: (callback: (data: { keepSegments: KeepSegmentData[]; srtPath: string; edlPath?: string | null; totalKeep: number; totalDuration: number }) => void) => {
     const handler = (_: unknown, data: { keepSegments: KeepSegmentData[]; srtPath: string; totalKeep: number; totalDuration: number }): void => callback(data)
     ipcRenderer.on('autocut:complete', handler)
     return (): void => { ipcRenderer.removeListener('autocut:complete', handler) }

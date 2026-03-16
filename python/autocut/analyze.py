@@ -22,6 +22,7 @@ from stage2 import tag_window_context, tag_windows_batch_claude
 from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary
 from storyboard import run_narrative_editing, run_narrative_editing_claude
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
+from edl_export import generate_edl
 
 
 def log(msg: str):
@@ -387,12 +388,21 @@ def main():
                 srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
             write_srt(validated, srt_path)
 
+            # EDL 생성
+            edl_path = srt_path.replace(".srt", ".edl")
+            edl_content = generate_edl(validated, files)
+            if edl_content:
+                with open(edl_path, "w", encoding="utf-8") as ef:
+                    ef.write(edl_content)
+                log(f"EDL 생성: {edl_path}")
+
             elapsed = time.time() - t_start
             log(f"재편집 완료: {len(validated)}개 KEEP, SRT={srt_path}, 총 {elapsed:.1f}s 소요")
             emit({
                 "type": "complete",
                 "keepSegments": validated,
                 "srtPath": srt_path,
+                "edlPath": edl_path,
                 "totalKeep": len(validated),
                 "totalDuration": cached_duration,
             })
@@ -791,6 +801,14 @@ def main():
             srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
         write_srt(validated, srt_path)
 
+        # EDL 생성
+        edl_path = srt_path.replace(".srt", ".edl")
+        edl_content = generate_edl(validated, files)
+        if edl_content:
+            with open(edl_path, "w", encoding="utf-8") as ef:
+                ef.write(edl_content)
+            log(f"EDL 생성: {edl_path}")
+
         # 완료
         elapsed = time.time() - t_start
         log(f"전체 완료: {len(validated)}개 KEEP, SRT={srt_path}, 총 {elapsed:.1f}s 소요")
@@ -798,6 +816,7 @@ def main():
             "type": "complete",
             "keepSegments": validated,
             "srtPath": srt_path,
+            "edlPath": edl_path,
             "totalKeep": len(validated),
             "totalDuration": total_duration,
         })

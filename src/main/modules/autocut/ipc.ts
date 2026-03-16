@@ -378,6 +378,7 @@ export function registerAutocutIpc(): void {
               sendToRenderer('autocut:complete', {
                 keepSegments: data.keepSegments,
                 srtPath: data.srtPath,
+                edlPath: data.edlPath || null,
                 totalKeep: data.totalKeep,
                 totalDuration: data.totalDuration
               })

@@ -22,6 +22,7 @@ export default function AutocutModule(): JSX.Element {
   const reset = useAutocutStore((s) => s.reset)
   const keepSegments = useAutocutStore((s) => s.keepSegments)
   const srtPath = useAutocutStore((s) => s.srtPath)
+  const edlPath = useAutocutStore((s) => s.edlPath)
   const previewMode = useAutocutStore((s) => s.previewMode)
   const previewPaused = useAutocutStore((s) => s.previewPaused)
   const startPreview = useAutocutStore((s) => s.startPreview)
@@ -50,7 +51,7 @@ export default function AutocutModule(): JSX.Element {
       addWindowResult(data)
     })
     const cleanupComplete = window.electronAPI.autocut.onAnalysisComplete((data) => {
-      setAnalysisComplete(data.keepSegments, data.srtPath)
+      setAnalysisComplete(data.keepSegments, data.srtPath, data.edlPath)
     })
     const cleanupError = window.electronAPI.autocut.onError((message) => {
       setError(message)
@@ -263,6 +264,7 @@ export default function AutocutModule(): JSX.Element {
                       const s = Math.floor(totalSec % 60)
                       return `${m}분 ${s}초`
                     })()}
+                    {edlPath && ' | EDL 생성됨'}
                   </span>
                   <div className="settings-panel__controls">
                     <button
