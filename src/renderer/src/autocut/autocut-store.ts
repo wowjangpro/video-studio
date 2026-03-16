@@ -88,9 +88,11 @@ interface AppState {
   resumeInfo: ResumeInfo | null
   videoPlaying: boolean
   userPlayback: boolean
+  excludedFiles: Set<number>
   editingComment: string
   aiEngine: 'ollama' | 'claude'
 
+  toggleFileExclude: (index: number) => void
   setEditingComment: (comment: string) => void
   setAiEngine: (engine: 'ollama' | 'claude') => void
   setFolder: (folderPath: string, files: FileInfo[], resumeInfo?: ResumeInfo | null) => void
@@ -144,6 +146,7 @@ const initialState = {
   previewPaused: false,
   previewSegmentIndex: 0,
   resumeInfo: null as ResumeInfo | null,
+  excludedFiles: new Set<number>(),
   videoPlaying: false,
   userPlayback: false,
   editingComment: localStorage.getItem('autocut:editingComment') || '',
@@ -173,6 +176,16 @@ export const useAutocutStore = create<AppState>((set, get) => ({
       errorMessage: null,
       resumeInfo: resumeInfo ?? null
     })
+  },
+
+  toggleFileExclude: (index) => {
+    const excluded = new Set(get().excludedFiles)
+    if (excluded.has(index)) {
+      excluded.delete(index)
+    } else {
+      excluded.add(index)
+    }
+    set({ excludedFiles: excluded })
   },
 
   setEditingComment: (comment) => {

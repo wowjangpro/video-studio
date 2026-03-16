@@ -22,15 +22,22 @@ export default function FileListPanel(): JSX.Element {
   const selectFile = useAutocutStore((s) => s.selectFile)
   const analysisFileIndex = useAutocutStore((s) => s.analysisFileIndex)
   const stage = useAutocutStore((s) => s.stage)
+  const excludedFiles = useAutocutStore((s) => s.excludedFiles)
+  const toggleFileExclude = useAutocutStore((s) => s.toggleFileExclude)
 
   const processing = isFileAnalysis(stage)
+  const isIdle = stage === 'idle'
+  const isComplete = stage === 'complete'
 
   return (
     <>
-      <div className="file-list__header">영상 파일 ({files.length})</div>
+      <div className="file-list__header">
+        영상 파일 ({files.length - excludedFiles.size}/{files.length})
+      </div>
       {files.map((file, i) => {
         const isCurrent = processing && i === analysisFileIndex
         const isDone = processing && analysisFileIndex >= 0 && i < analysisFileIndex
+        const isExcluded = excludedFiles.has(i)
 
         return (
           <div
@@ -39,7 +46,8 @@ export default function FileListPanel(): JSX.Element {
               `file-list__item` +
               (i === selectedFileIndex ? ' file-list__item--selected' : '') +
               (isCurrent ? ' file-list__item--analyzing' : '') +
-              (isDone ? ' file-list__item--done' : '')
+              (isDone ? ' file-list__item--done' : '') +
+              (isExcluded ? ' file-list__item--excluded' : '')
             }
             onClick={() => selectFile(i)}
           >
@@ -61,6 +69,18 @@ export default function FileListPanel(): JSX.Element {
                 {isDone && <span className="file-list__status file-list__status--done">완료</span>}
               </div>
             </div>
+            {(isIdle || isComplete) && (
+              <button
+                className={`file-list__exclude-btn ${isExcluded ? 'file-list__exclude-btn--active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleFileExclude(i)
+                }}
+                title={isExcluded ? '포함' : '제외'}
+              >
+                {isExcluded ? '✕' : '✓'}
+              </button>
+            )}
           </div>
         )
       })}
