@@ -88,11 +88,10 @@ interface AppState {
   resumeInfo: ResumeInfo | null
   videoPlaying: boolean
   userPlayback: boolean
-  excludedFiles: Set<number>
   editingComment: string
   aiEngine: 'ollama' | 'claude'
 
-  toggleFileExclude: (index: number) => void
+  removeFile: (index: number) => void
   setEditingComment: (comment: string) => void
   setAiEngine: (engine: 'ollama' | 'claude') => void
   setFolder: (folderPath: string, files: FileInfo[], resumeInfo?: ResumeInfo | null) => void
@@ -146,7 +145,6 @@ const initialState = {
   previewPaused: false,
   previewSegmentIndex: 0,
   resumeInfo: null as ResumeInfo | null,
-  excludedFiles: new Set<number>(),
   videoPlaying: false,
   userPlayback: false,
   editingComment: localStorage.getItem('autocut:editingComment') || '',
@@ -178,14 +176,21 @@ export const useAutocutStore = create<AppState>((set, get) => ({
     })
   },
 
-  toggleFileExclude: (index) => {
-    const excluded = new Set(get().excludedFiles)
-    if (excluded.has(index)) {
-      excluded.delete(index)
-    } else {
-      excluded.add(index)
-    }
-    set({ excludedFiles: excluded })
+  removeFile: (index) => {
+    const { files, selectedFileIndex } = get()
+    let cumulative = 0
+    const newFiles = files
+      .filter((_, i) => i !== index)
+      .map((f) => {
+        const updated = { ...f, cumulativeOffset: cumulative }
+        cumulative += f.duration
+        return updated
+      })
+    set({
+      files: newFiles,
+      totalDuration: cumulative,
+      selectedFileIndex: Math.max(0, Math.min(selectedFileIndex, newFiles.length - 1))
+    })
   },
 
   setEditingComment: (comment) => {

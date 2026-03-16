@@ -9,8 +9,6 @@ export default function SettingsPanel(): JSX.Element {
   const setEditingComment = useAutocutStore((s) => s.setEditingComment)
   const aiEngine = useAutocutStore((s) => s.aiEngine)
   const setAiEngine = useAutocutStore((s) => s.setAiEngine)
-  const excludedFiles = useAutocutStore((s) => s.excludedFiles)
-
   const handleStartAnalysis = async (resume = false, forceReanalyze = false): Promise<void> => {
     if (!folderPath) return
     const msg = forceReanalyze ? '전체 재분석 준비 중...' : resume ? '이전 분석 재개 준비 중...' : '분석 준비 중...'
@@ -21,8 +19,7 @@ export default function SettingsPanel(): JSX.Element {
         resume,
         force_reanalyze: forceReanalyze,
         editing_comment: editingComment.trim() || undefined,
-        ai_engine: aiEngine,
-        excluded_files: Array.from(excludedFiles)
+        ai_engine: aiEngine
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
