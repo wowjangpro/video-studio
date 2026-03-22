@@ -89,11 +89,11 @@ interface AppState {
   videoPlaying: boolean
   userPlayback: boolean
   editingComment: string
-  aiEngine: 'ollama' | 'claude'
+  aiEngine: 'claude' | 'scored'
 
   removeFile: (index: number) => void
   setEditingComment: (comment: string) => void
-  setAiEngine: (engine: 'ollama' | 'claude') => void
+  setAiEngine: (engine: 'claude' | 'scored') => void
   setFolder: (folderPath: string, files: FileInfo[], resumeInfo?: ResumeInfo | null) => void
   setResumeInfo: (resumeInfo: ResumeInfo | null) => void
   selectFile: (index: number) => void
@@ -139,7 +139,7 @@ const initialState = {
   timelineZoom: 10,
   timelineScrollLeft: 0,
   windowDuration: 10,
-  targetMinutes: 40,
+  targetMinutes: parseInt(localStorage.getItem('autocut:targetMinutes') || '0', 10),
   analysisFileIndex: -1,
   previewMode: false,
   previewPaused: false,
@@ -148,7 +148,7 @@ const initialState = {
   videoPlaying: false,
   userPlayback: false,
   editingComment: localStorage.getItem('autocut:editingComment') || '',
-  aiEngine: (localStorage.getItem('autocut:aiEngine') || 'claude') as 'ollama' | 'claude'
+  aiEngine: (localStorage.getItem('autocut:aiEngine') || 'claude') as 'claude' | 'scored'
 }
 
 export const useAutocutStore = create<AppState>((set, get) => ({
@@ -295,7 +295,12 @@ export const useAutocutStore = create<AppState>((set, get) => ({
 
   setTimelineScroll: (scrollLeft) => set({ timelineScrollLeft: scrollLeft }),
 
-  updateSettings: (settings) => set(settings),
+  updateSettings: (settings) => {
+    if (settings.targetMinutes !== undefined) {
+      localStorage.setItem('autocut:targetMinutes', String(settings.targetMinutes))
+    }
+    set(settings)
+  },
 
   loadSrt: (segments, srtPath) =>
     set({ stage: 'complete', percent: 100, message: '분석 완료', keepSegments: segments, srtPath }),

@@ -25,6 +25,25 @@ LABEL_KO = {
 }
 
 
+# 아웃도어 이동 키워드 — walking 장면이 "콘텐츠 이동"인지 "단순 이동"인지 판별
+# 이 키워드가 장면 설명에 포함되면 KEEP/PARTIAL 보호 대상
+TRAIL_KEYWORDS = (
+    # 산악/등산
+    "산길", "숲길", "계곡", "능선", "등산", "트레일", "오르막", "내리막",
+    "하이킹", "트래킹", "릿지", "정상", "봉우리", "고개",
+    "돌길", "산을", "숲을", "숲속", "산속", "등산로",
+    # 해안/섬
+    "해변", "바닷가", "해안", "갯벌", "섬", "선착장", "포구", "해안길",
+    # 걷기길/둘레길
+    "둘레길", "올레길", "해파랑", "종주",
+    # 백패킹/캠핑 이동
+    "백패킹", "야영", "캠핑장", "야영장", "텐트", "타프",
+    # 영어
+    "trail", "hike", "hiking", "mountain", "forest", "ridge", "summit", "peak",
+    "beach", "island", "coast", "backpacking", "camping",
+)
+
+
 def window_has_speech(w: dict) -> bool:
     """윈도우에 말소리가 있는지 판별 (VAD + Stage 2 교차 확인)"""
     return w.get("has_speech", False) or w.get("source", "") in ("vad", "vad+vision")
@@ -231,6 +250,9 @@ def group_windows_to_scenes(windows: list[dict]) -> list[dict]:
         start = scene_windows[0].get("globalStart", 0.0)
         end = scene_windows[-1].get("globalEnd", 0.0)
 
+        # 파일 인덱스: 첫 윈도우의 fileIndex (장면이 걸치면 첫 파일 기준)
+        file_index = scene_windows[0].get("fileIndex", -1)
+
         scenes.append({
             "id": scene_idx + 1,
             "start": start,
@@ -245,6 +267,7 @@ def group_windows_to_scenes(windows: list[dict]) -> list[dict]:
             "avg_motion": avg_motion,
             "motion_level": _motion_level(avg_motion),
             "is_ng": False,
+            "file_index": file_index,
         })
 
     _log(f"장면 그룹핑: {len(windows)}개 윈도우 → {len(scenes)}개 장면")
@@ -412,14 +435,29 @@ def generate_compact_storyboard(
     """
     scene_coverage = sum(s["duration"] for s in scenes)
 
+    # 파일 수 파악
+    file_indices = set(s.get("file_index", -1) for s in scenes)
+    file_count = len([f for f in file_indices if f >= 0]) or 1
+
     lines = [
         f"=== 아웃도어 브이로그 요약 스토리보드 ({len(scenes)}개 장면, "
+        f"{file_count}개 클립, "
         f"전체 {_format_duration(total_duration)}, "
         f"커버리지 {_format_duration(scene_coverage)}) ===",
         "",
     ]
 
+    prev_file_index = -1
+
     for scene in scenes:
+        # 파일 경계 구분자 — 클립이 바뀔 때 표시
+        fi = scene.get("file_index", -1)
+        if fi >= 0 and fi != prev_file_index:
+            if prev_file_index >= 0:
+                lines.append("")
+            lines.append(f"--- 클립 #{fi + 1} ---")
+            prev_file_index = fi
+
         sid = scene["id"]
         t_start = _format_time(scene["start"])
         t_end = _format_time(scene["end"])

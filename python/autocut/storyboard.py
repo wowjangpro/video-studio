@@ -14,6 +14,7 @@ import time
 import httpx
 
 from scene_detector import (
+    TRAIL_KEYWORDS,
     generate_compact_storyboard,
     generate_narrative_storyboard,
     window_has_speech,
@@ -21,24 +22,6 @@ from scene_detector import (
 
 EDITING_MODEL = "qwen3:14b"
 OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-
-# 아웃도어 이동 키워드 — walking 장면이 "콘텐츠 이동"인지 "단순 이동"인지 판별
-# 이 키워드가 장면 설명에 포함되면 KEEP/PARTIAL 보호 대상
-TRAIL_KEYWORDS = (
-    # 산악/등산
-    "산길", "숲길", "계곡", "능선", "등산", "트레일", "오르막", "내리막",
-    "하이킹", "트래킹", "릿지", "정상", "봉우리", "고개",
-    "돌길", "산을", "숲을", "숲속", "산속", "등산로",
-    # 해안/섬
-    "해변", "바닷가", "해안", "갯벌", "섬", "선착장", "포구", "해안길",
-    # 걷기길/둘레길
-    "둘레길", "올레길", "해파랑", "종주",
-    # 백패킹/캠핑 이동
-    "백패킹", "야영", "캠핑장", "야영장", "텐트", "타프",
-    # 영어
-    "trail", "hike", "hiking", "mountain", "forest", "ridge", "summit", "peak",
-    "beach", "island", "coast", "backpacking", "camping",
-)
 
 
 def _log(msg: str):
@@ -87,8 +70,8 @@ __PLANNING_RESULT__
 ## 편집 방식
 
 원본 영상은 총 __TOTAL_DURATION__입니다.
-**완성본은 원본의 50~70% 분량(약 __KEEP_MIN_LOW__~__KEEP_MIN_HIGH__분)을 목표로 하세요.**
-정말 불필요한 장면만 선별적으로 CUT하세요. 대부분의 장면은 남겨야 합니다.
+__DURATION_GUIDE__
+__KEEP_BIAS__
 **버릴 장면(cut/partial)만 출력하세요. 출력하지 않은 장면은 자동으로 전체 KEEP 처리됩니다.**
 
 ## 편집 원칙
@@ -940,6 +923,94 @@ def _make_segment(
 
 
 # ---------------------------------------------------------------------------
+# 재편집 헬퍼
+# ---------------------------------------------------------------------------
+
+def _build_keep_summary(
+    decisions: list[dict],
+    scenes: list[dict],
+    target_minutes: int = 0,
+) -> str:
+    """현재 KEEP/PARTIAL 장면 요약 텍스트 생성 (재편집 프롬프트용)
+
+    장면별 길이와 통계를 포함하여 LLM이 구체적으로 판단할 수 있게 함.
+    """
+    scene_map = {s["id"]: s for s in scenes}
+    entries = []  # (scene_id, decision, dur_min, has_speech, line)
+
+    for d in sorted(decisions, key=lambda x: x.get("scene", 0)):
+        decision = d.get("decision", "cut")
+        if decision == "cut":
+            continue
+        scene = scene_map.get(d.get("scene", -1))
+        if not scene:
+            continue
+
+        sid = scene["id"]
+        dur = scene["duration"]
+        action = scene["action"]
+        has_speech = scene["has_speech"]
+
+        speech_part = ""
+        if has_speech:
+            pct = int(scene["speech_ratio"] * 100)
+            speech_part = f" ★말소리{pct}%"
+
+        descs = scene.get("descs", [])
+        desc_text = "→".join(descs[:2]) if descs else ""
+
+        if decision == "keep":
+            dur_min = dur / 60
+            dur_str = f"{dur_min:.1f}분"
+            line = f"[S{sid:02d}] KEEP ({dur_str}) {action}{speech_part} | {desc_text}"
+        else:  # partial
+            n_w = len(d.get("keep_windows", []))
+            dur_min = n_w * 10 / 60
+            dur_str = f"{dur_min:.1f}분"
+            line = f"[S{sid:02d}] PARTIAL ({dur_str}, {n_w}윈도우) {action}{speech_part} | {desc_text}"
+
+        entries.append((sid, decision, dur_min, has_speech, line))
+
+    total_keep_min = sum(e[2] for e in entries)
+    keep_count = len(entries)
+    speech_count = sum(1 for e in entries if e[3])
+    no_speech_count = keep_count - speech_count
+
+    # 통계 헤더
+    header_lines = [
+        f"총 {keep_count}개 장면, 합계 {total_keep_min:.1f}분 "
+        f"(말소리 {speech_count}개, 비말소리 {no_speech_count}개)",
+    ]
+    if target_minutes > 0:
+        need_cut = total_keep_min - target_minutes
+        if need_cut > 0:
+            header_lines.append(
+                f"→ 목표 {target_minutes}분까지 최소 {need_cut:.0f}분({int(need_cut / total_keep_min * 100)}%)을 "
+                f"추가로 CUT해야 합니다."
+            )
+
+    header = "\n".join(header_lines)
+    scene_lines = "\n".join(e[4] for e in entries)
+    return f"{header}\n\n{scene_lines}"
+
+
+def _merge_reedit_decisions(
+    original: list[dict],
+    new_cuts: list[dict],
+) -> list[dict]:
+    """재편집 결과를 원본 decisions에 병합 (새 CUT/PARTIAL이 기존 KEEP을 덮어씀)"""
+    new_map = {d["scene"]: d for d in new_cuts}
+    merged = []
+    for d in original:
+        sid = d.get("scene", -1)
+        if sid in new_map:
+            merged.append(new_map[sid])
+        else:
+            merged.append(d)
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # 메인 진입점
 # ---------------------------------------------------------------------------
 
@@ -949,6 +1020,7 @@ def run_narrative_editing(
     total_duration: float,
     progress_callback=None,
     editing_comment: str = "",
+    target_minutes: int = 0,
 ) -> list[dict]:
     """장면 기반 내러티브 편집 -- 2-Pass LLM (CUT-only 출력)
 
@@ -1025,15 +1097,27 @@ def run_narrative_editing(
     if progress_callback:
         progress_callback("editing", 87, "LLM 편집 판단 중...")
 
-    keep_min_low = int(total_min * 0.5)
-    keep_min_high = int(total_min * 0.7)
+    if target_minutes > 0:
+        keep_ratio = target_minutes / max(total_min, 1)
+        duration_line = f"**완성본은 반드시 약 {target_minutes}분을 목표로 하세요.** (원본 {total_min}분, 약 {int(keep_ratio * 100)}%만 유지)"
+        _log(f"목표 시간 설정: {target_minutes}분 (유지율 {keep_ratio:.0%})")
+        if keep_ratio < 0.5:
+            keep_bias = f"목표가 원본의 {int(keep_ratio * 100)}%이므로 과감하게 CUT하세요. 말소리 없는 장면은 적극적으로 CUT하고, 긴 장면은 PARTIAL로 핵심만 남기세요."
+        else:
+            keep_bias = "정말 불필요한 장면만 선별적으로 CUT하세요. 대부분의 장면은 남겨야 합니다."
+    else:
+        keep_min_low = int(total_min * 0.5)
+        keep_min_high = int(total_min * 0.7)
+        duration_line = f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**"
+        keep_bias = "정말 불필요한 장면만 선별적으로 CUT하세요. 대부분의 장면은 남겨야 합니다."
+
     editing_prompt = (
         EDITING_PROMPT_TEMPLATE
         .replace("__STORYBOARD__", storyboard)
         .replace("__PLANNING_RESULT__", planning_text)
         .replace("__TOTAL_DURATION__", f"{total_min}분")
-        .replace("__KEEP_MIN_LOW__", str(keep_min_low))
-        .replace("__KEEP_MIN_HIGH__", str(keep_min_high))
+        .replace("__DURATION_GUIDE__", duration_line)
+        .replace("__KEEP_BIAS__", keep_bias)
         .replace("=== 스토리보드 ===", f"{comment_section}=== 스토리보드 ===")
     )
 
@@ -1064,6 +1148,162 @@ def run_narrative_editing(
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
     _log(f"편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
 
+    # -------------------------------------------------------------------
+    # 목표 시간 초과 시 재편집 (최대 3회)
+    # -------------------------------------------------------------------
+    MAX_REEDIT = 3
+    TOLERANCE = 1.15  # 15% 여유
+
+    for reedit_round in range(MAX_REEDIT):
+        current_min = total_keep / 60
+        if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
+            break
+
+        over_min = int(current_min - target_minutes)
+        _log(f"목표 초과: {current_min:.1f}분 > {target_minutes}분 (재편집 {reedit_round + 1}/{MAX_REEDIT})")
+
+        if progress_callback:
+            progress_callback(
+                "editing", 93 + reedit_round,
+                f"목표 초과 ({current_min:.0f}분>{target_minutes}분), 재편집 {reedit_round + 1}차...",
+            )
+
+        keep_summary = _build_keep_summary(decisions, scenes, target_minutes)
+        reedit_prompt = REEDIT_PROMPT_OLLAMA.format(
+            current_min=int(current_min),
+            target_minutes=target_minutes,
+            total_min=total_min,
+            over_min=over_min,
+            keep_summary=keep_summary,
+        )
+
+        new_cuts = _run_llm_with_retry(
+            reedit_prompt, len(scenes), stage="editing", percent=93 + reedit_round,
+        )
+        if not new_cuts:
+            _log("재편집: 추가 CUT 없음, 중단")
+            break
+
+        _log(f"재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
+
+        decisions = _merge_reedit_decisions(decisions, new_cuts)
+        decisions = _fill_missing_scenes(decisions, scenes)
+        decisions = _cap_long_scenes(decisions, scenes, all_windows)
+        decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+
+        keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
+        partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
+        cut_count = sum(1 for d in decisions if d.get("decision") == "cut")
+        _log(f"재편집 후: KEEP {keep_count}, PARTIAL {partial_count}, CUT {cut_count}")
+
+        keep_segments = _apply_decisions(decisions, scenes, all_windows)
+        total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+
+    return keep_segments
+
+
+# ===========================================================================
+# Scored 편집 — 순수 알고리즘 (LLM 없음)
+# ===========================================================================
+
+def run_scored_editing(
+    scenes: list[dict],
+    all_windows: list[dict],
+    total_duration: float,
+    progress_callback=None,
+    editing_comment: str = "",
+    target_minutes: int = 0,
+) -> list[dict]:
+    """점수 기반 편집 — scene_scorer + budget_selector (LLM 미사용)
+
+    run_narrative_editing()과 동일한 keep_segments 형식을 반환한다.
+    향후 LLM을 "리뷰어"로 활용할 수 있는 구조를 남겨둔다.
+    """
+    from scene_scorer import score_all_scenes
+    from budget_selector import select_scenes
+
+    if not scenes:
+        return []
+
+    _log(f"Scored 편집 시작: {len(scenes)}개 장면, {len(all_windows)}개 윈도우")
+    if editing_comment:
+        _log(f"편집 코멘트: {editing_comment} (scored 모드에서는 참고용)")
+
+    # --- 1단계: 장면 점수 산출 (83~87%) ---
+    if progress_callback:
+        progress_callback("scoring", 83, "장면 점수 산출 중...")
+
+    score_results = score_all_scenes(scenes, all_windows, total_duration)
+
+    if progress_callback:
+        scores = [r["score"] for r in score_results]
+        avg = sum(scores) / len(scores) if scores else 0
+        progress_callback(
+            "scoring", 87,
+            f"점수 산출 완료: {len(score_results)}개 장면, 평균 {avg:.1f}점",
+        )
+
+    # --- 2단계: 예산 기반 장면 선택 (87~90%) ---
+    if progress_callback:
+        progress_callback("selection", 87, "장면 선택 중...")
+
+    keep_segments = select_scenes(
+        scenes, all_windows, target_minutes, total_duration,
+    )
+
+    total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+    _log(f"Scored 편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+
+    if progress_callback:
+        progress_callback(
+            "selection", 90,
+            f"장면 선택 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분",
+        )
+
+    return keep_segments
+
+
+# ===========================================================================
+# 하이브리드 편집 — Scoring + Budget Selection + Claude LLM 보정 + Hard Trim
+# ===========================================================================
+
+def run_hybrid_editing(
+    scenes: list[dict],
+    all_windows: list[dict],
+    total_duration: float,
+    progress_callback=None,
+    editing_comment: str = "",
+    target_minutes: int = 0,
+) -> list[dict]:
+    """1차 편집: Claude에 전체 장면을 보여주고 쓸모없는 장면만 제거
+
+    scoring/budget/hard_trim 없이, Claude가 맥락을 보고 직접 판단.
+    """
+    if not scenes:
+        return []
+
+    _log(f"1차 편집 시작: {len(scenes)}개 장면, {len(all_windows)}개 윈도우")
+    if editing_comment:
+        _log(f"편집 코멘트: {editing_comment}")
+
+    if progress_callback:
+        progress_callback("editing", 83, "Claude 편집 중...")
+
+    # 전체 장면을 Claude에 전달 — Claude가 쓸모없는 장면만 CUT
+    keep_segments = run_narrative_editing_claude(
+        scenes, all_windows, total_duration,
+        progress_callback=progress_callback,
+        editing_comment=editing_comment,
+        target_minutes=0,  # 목표 시간 없음
+    )
+
+    total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+    _log(f"1차 편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+
+    if progress_callback:
+        progress_callback("editing", 95, f"편집 완료: {total_keep / 60:.1f}분")
+
     return keep_segments
 
 
@@ -1071,8 +1311,8 @@ def run_narrative_editing(
 # Claude 편집 — 1-Pass (기획+편집 통합)
 # ===========================================================================
 
-CLAUDE_EDITING_PROMPT = """당신은 캠핑/아웃도어 브이로그 전문 편집자입니다.
-아래 요약 스토리보드를 보고, 버릴 장면만 선별하세요.
+CLAUDE_EDITING_PROMPT = """당신은 캠핑/아웃도어 브이로그 1차 편집자입니다.
+아래 스토리보드에서 **확실히 쓸모없는 장면만** 제거하세요. 애매하면 남기세요.
 
 ## 스토리보드 포맷
 
@@ -1080,6 +1320,7 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑/아웃도어 브이로그 전문 편
 - ★: 말소리 비율 (없으면 말소리 없음)
 - M: 모션 레벨 (저/중/고)
 - W: 해당 장면의 윈도우 번호 범위
+- "--- 클립 #N ---": 다른 영상 파일의 경계
 
 ## 상세 정보 파일
 
@@ -1089,23 +1330,28 @@ __DETAIL_FILES__
 ## 편집 방식
 
 원본 영상은 총 __TOTAL_DURATION__입니다.
-__DURATION_GUIDE__
+**목표 시간 없음 — 쓸모없는 장면만 제거하는 1차 편집입니다.**
 **버릴 장면(cut/partial)만 출력하세요. 출력하지 않은 장면은 자동으로 전체 KEEP 처리됩니다.**
 
-## 편집 원칙
+## CUT 대상 (이것만 제거)
 
-1. **내러티브 흐름 유지**: 도착→셋업→활동→식사→불멍→마무리의 자연스러운 흐름을 유지하세요.
+1. **주차장/도로 단순 이동** (말소리 없는 경우)
+2. **차량 운전(driving)** (말소리 없는 경우)
+3. **정지/대기 장면** — 말소리 없고 모션 없고 아무런 변화 없이 멈춰있는 장면
+4. **흔들림/NG** — 심하게 흔들리거나 의미 없는 촬영
+5. **완전히 같은 내용의 반복** — 같은 행동을 같은 장소에서 반복하는 경우만
 
-2. **말소리(★) 장면은 절대 보호**: ★ 표시 장면은 출력하지 마세요(자동 KEEP).
-   - 말소리 장면이 아무리 길어도 PARTIAL하지 마세요.
-   - 대사가 포함된 장면을 부득이하게 줄여야 할 때는, 반드시 문장이 끝나는 자연스러운 지점에서 자르세요.
-   - 유일한 예외: 완전히 같은 내용을 반복하는 ★ 장면만 CUT 가능.
+## 절대 CUT 금지
 
-3. **적극 CUT 대상**: 주차장/도로 단순 이동, 차량 운전(driving), 대기/정지 장면(말소리 없고 변화 없음), 동일 활동 반복.
+1. **말소리(★) 장면** — 출력하지 마세요 (자동 KEEP)
+2. **모든 활동 장면** — 요리, 설치, 식사, 불멍, 풍경, 장비, 하이킹 등
+3. **각 클립의 장면** — 모든 클립에서 최소 1개 이상 장면을 유지하세요. 특정 클립이 통째로 빠지면 시간 흐름에 공백이 생깁니다.
 
-4. **PARTIAL 사용**: 비말소리 장면이 길 때만 사용. keep_windows로 남길 핵심 윈도우 번호를 지정하세요.
+## 판단 원칙
 
-5. **아웃도어 핵심 보호**: 텐트 설치, 풍경, 야경/불멍, 트레일 하이킹, 장비 소개, 요리/식사는 CUT하지 마세요. 길면 PARTIAL.
+- **의심스러우면 남기세요.** 사용자가 2차 편집에서 추가로 제거할 수 있습니다.
+- 이 단계는 "확실한 쓰레기 제거"이지 "좋은 편집"이 아닙니다.
+- 분량을 줄이려 하지 마세요. 쓸모없는 것만 제거하면 됩니다.
 
 ## 출력 형식
 
@@ -1143,6 +1389,79 @@ CUT_ONLY_SCHEMA = {
     },
     "required": ["reasoning", "decisions"]
 }
+
+
+# ---------------------------------------------------------------------------
+# 목표 시간 초과 시 재편집 프롬프트
+# ---------------------------------------------------------------------------
+
+REEDIT_PROMPT_OLLAMA = """이전 편집 결과가 목표 시간을 초과했습니다.
+
+현재 결과: {current_min}분 (목표: {target_minutes}분, 원본: {total_min}분)
+**{over_min}분을 추가로 줄여야 합니다.**
+
+## 현재 KEEP 장면 목록 (줄여야 할 대상)
+
+{keep_summary}
+
+## 요청
+
+위 KEEP 장면 중 추가로 CUT하거나 PARTIAL할 장면을 선택하세요.
+
+### 우선 CUT 대상
+- 반복적이거나 비핵심적인 장면
+- 짧은 비말소리 장면
+- 이미 비슷한 장면이 다른 곳에서 유지되는 경우
+
+### 보호 대상 (가급적 남기세요)
+- ★ 말소리가 높은 장면 (대사/해설 포함)
+- 내러티브 전환점 (도착, 셋업 시작, 식사, 마무리)
+- 유일한 활동 장면 (해당 활동이 이 장면에서만 나옴)
+
+내러티브 흐름이 끊기지 않도록 주의하세요.
+
+## 출력
+
+먼저 편집 판단 근거를 간단히 서술하세요.
+그 후 === JSON === 구분자 아래에 **추가로 제거할 장면만** JSON 배열로 출력하세요.
+
+[
+  {{"scene": 5, "decision": "cut", "reason": "..."}},
+  {{"scene": 8, "decision": "partial", "keep_windows": [30,31], "reason": "..."}},
+  ...
+]
+"""
+
+REEDIT_PROMPT_CLAUDE = """이전 편집 결과가 목표 시간을 초과했습니다.
+
+현재 결과: {current_min}분 (목표: {target_minutes}분, 원본: {total_min}분)
+**{over_min}분을 추가로 줄여야 합니다.**
+
+## 현재 KEEP 장면 목록 (줄여야 할 대상)
+
+{keep_summary}
+
+## 요청
+
+위 KEEP 장면 중 추가로 CUT하거나 PARTIAL할 장면을 선택하세요.
+
+### 우선 CUT 대상
+- 반복적이거나 비핵심적인 장면
+- 짧은 비말소리 장면
+- 이미 비슷한 장면이 다른 곳에서 유지되는 경우
+
+### 보호 대상 (가급적 남기세요)
+- ★ 말소리가 높은 장면 (대사/해설 포함)
+- 내러티브 전환점 (도착, 셋업 시작, 식사, 마무리)
+- 유일한 활동 장면 (해당 활동이 이 장면에서만 나옴)
+
+내러티브 흐름이 끊기지 않도록 주의하세요.
+
+## 출력 형식
+
+반드시 아래 형식의 JSON 객체만 출력하세요. 다른 텍스트를 섞지 마세요:
+{{"reasoning": "추가 CUT 판단 근거", "decisions": [{{"scene": 장면번호, "decision": "cut" 또는 "partial", "keep_windows": [윈도우번호, ...], "reason": "사유"}}]}}
+"""
 
 
 def _split_storyboard_to_files(storyboard: str, scenes: list[dict], num_parts: int = 4) -> list[tuple[str, str]]:
@@ -1209,6 +1528,7 @@ def run_narrative_editing_claude(
     total_duration: float,
     progress_callback=None,
     editing_comment: str = "",
+    target_minutes: int = 0,
 ) -> list[dict]:
     """Claude 기반 내러티브 편집 — 요약 프롬프트 + 상세 파일 참조"""
     from claude_client import check_claude_available, call_claude_text
@@ -1246,8 +1566,15 @@ def run_narrative_editing_claude(
             f"- 파트{i+1} ({label}): {path}" for i, (path, label) in enumerate(detail_parts)
         )
 
-        # 분량 가이드: 코멘트에 시간 지시가 있으면 코멘트 우선
-        default_guide = f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**"
+        # 분량 가이드: target_minutes가 있으면 그걸 사용, 없으면 기본 50~70%
+        if target_minutes > 0:
+            keep_ratio = target_minutes / max(total_min, 1)
+            default_guide = f"**완성본은 반드시 약 {target_minutes}분을 목표로 하세요.** (원본 {total_min}분, 약 {int(keep_ratio * 100)}%만 유지)"
+            if keep_ratio < 0.5:
+                default_guide += f"\n목표가 원본의 {int(keep_ratio * 100)}%이므로 과감하게 CUT하세요. 말소리 없는 장면은 적극적으로 CUT하고, 긴 장면은 PARTIAL로 핵심만 남기세요."
+            _log(f"목표 시간 설정: {target_minutes}분 (유지율 {keep_ratio:.0%})")
+        else:
+            default_guide = f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**"
         comment_section = ""
         if editing_comment:
             comment_section = f"\n\n## 편집자 요청 (이 요청이 최우선입니다 — 위의 기본 가이드라인보다 우선 적용하세요)\n\n{editing_comment}\n"
@@ -1309,6 +1636,67 @@ def run_narrative_editing_claude(
     keep_segments = _apply_decisions(decisions, scenes, all_windows)
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
     _log(f"Claude 편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+
+    # -------------------------------------------------------------------
+    # 목표 시간 초과 시 재편집 (최대 3회)
+    # -------------------------------------------------------------------
+    MAX_REEDIT = 3
+    TOLERANCE = 1.15  # 15% 여유
+
+    for reedit_round in range(MAX_REEDIT):
+        current_min = total_keep / 60
+        if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
+            break
+
+        over_min = int(current_min - target_minutes)
+        _log(f"목표 초과: {current_min:.1f}분 > {target_minutes}분 (Claude 재편집 {reedit_round + 1}/{MAX_REEDIT})")
+
+        if progress_callback:
+            progress_callback(
+                "editing", 93 + reedit_round,
+                f"목표 초과 ({current_min:.0f}분>{target_minutes}분), Claude 재편집 {reedit_round + 1}차...",
+            )
+
+        keep_summary = _build_keep_summary(decisions, scenes, target_minutes)
+        reedit_prompt = REEDIT_PROMPT_CLAUDE.format(
+            current_min=int(current_min),
+            target_minutes=target_minutes,
+            total_min=total_min,
+            over_min=over_min,
+            keep_summary=keep_summary,
+        )
+
+        _log(f"Claude 재편집 호출... (프롬프트 {len(reedit_prompt)}자)")
+        reedit_response = call_claude_text(reedit_prompt, model="sonnet", timeout=1800)
+
+        if not reedit_response:
+            _log("Claude 재편집: 응답 없음, 중단")
+            break
+
+        _log(f"=== Claude 재편집 응답 ({len(reedit_response)}자) ===\n{reedit_response}\n=== 응답 끝 ===")
+
+        new_cuts = _parse_claude_editing_response(reedit_response)
+        if new_cuts is None:
+            new_cuts = _parse_editing_output(reedit_response)
+        if not new_cuts:
+            _log("Claude 재편집: 추가 CUT 없음, 중단")
+            break
+
+        _log(f"Claude 재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
+
+        decisions = _merge_reedit_decisions(decisions, new_cuts)
+        decisions = _fill_missing_scenes(decisions, scenes)
+        decisions = _cap_long_scenes(decisions, scenes, all_windows)
+        decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+
+        keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
+        partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
+        cut_count = sum(1 for d in decisions if d.get("decision") == "cut")
+        _log(f"재편집 후: KEEP {keep_count}, PARTIAL {partial_count}, CUT {cut_count}")
+
+        keep_segments = _apply_decisions(decisions, scenes, all_windows)
+        total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
 
     return keep_segments
 

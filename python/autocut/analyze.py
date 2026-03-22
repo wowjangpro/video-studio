@@ -20,7 +20,7 @@ from vad_detector import detect_speech_regions
 from stt import transcribe_speech_regions, map_transcripts_to_windows
 from stage2 import tag_window_context, tag_windows_batch_claude
 from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary
-from storyboard import run_narrative_editing, run_narrative_editing_claude
+from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import generate_edl
 
@@ -264,6 +264,7 @@ def main():
     force_reanalyze = bool(options.get("force_reanalyze", False))
     editing_comment = str(options.get("editing_comment", "")).strip()
     ai_engine = str(options.get("ai_engine", "ollama"))  # "ollama" | "claude"
+    target_minutes = int(options.get("target_minutes", 0))
 
     log(f"시작: folder={folder_path}")
     log(f"옵션: window={window_duration}s, skip_vision={skip_vision}, resume={resume}, force_reanalyze={force_reanalyze}, ai_engine={ai_engine}")
@@ -272,11 +273,12 @@ def main():
 
     # ai_engine에 따라 캐시 버전 분리
     global PIPELINE_VERSION
-    if ai_engine == "claude":
-        PIPELINE_VERSION = "storyboard_v3_claude"
-        log("AI 엔진: Claude Code")
+    if ai_engine == "scored":
+        PIPELINE_VERSION = "storyboard_v3_scored"
+        log("AI 엔진: Scored (알고리즘)")
     else:
-        log("AI 엔진: Ollama (로컬)")
+        PIPELINE_VERSION = "storyboard_v3_claude"
+        log("AI 엔진: Claude (하이브리드)")
 
     t_start = time.time()
 
@@ -314,9 +316,10 @@ def main():
                 file_cumul.append(t_acc)
                 t_acc += fi["duration"]
 
-            # UI 복원: window_result 이벤트 재출력
+            # 윈도우에 fileIndex 주입 (캐시에 없을 수 있음) + UI 복원
             for i, wd in enumerate(all_window_data):
                 fi = max(0, bisect.bisect_right(file_cumul, wd["globalStart"]) - 1)
+                wd["fileIndex"] = fi  # scene_detector가 file_index로 사용
                 local_start = wd["globalStart"] - file_cumul[fi]
                 local_end = wd["globalEnd"] - file_cumul[fi]
                 result = {
@@ -349,17 +352,19 @@ def main():
 
             # Phase C: 내러티브 편집
             log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면 (캐시, engine={ai_engine})")
-            if ai_engine == "claude":
-                keep_segments = run_narrative_editing_claude(
+            if ai_engine == "scored":
+                keep_segments = run_scored_editing(
                     usable_scenes, all_window_data, cached_duration,
                     progress_callback=progress,
                     editing_comment=editing_comment,
+                    target_minutes=target_minutes,
                 )
-            else:
-                keep_segments = run_narrative_editing(
+            else:  # claude (기본값) — 하이브리드
+                keep_segments = run_hybrid_editing(
                     usable_scenes, all_window_data, cached_duration,
                     progress_callback=progress,
                     editing_comment=editing_comment,
+                    target_minutes=target_minutes,
                 )
             log(f"내러티브 편집 완료: {len(keep_segments)}개 KEEP")
 
@@ -754,17 +759,19 @@ def main():
 
         # 7. Phase C: 내러티브 편집
         log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면, {len(all_window_data)}개 윈도우 (engine={ai_engine})")
-        if ai_engine == "claude":
-            keep_segments = run_narrative_editing_claude(
+        if ai_engine == "scored":
+            keep_segments = run_scored_editing(
                 usable_scenes, all_window_data, total_duration,
                 progress_callback=progress,
                 editing_comment=editing_comment,
+                target_minutes=target_minutes,
             )
-        else:
-            keep_segments = run_narrative_editing(
+        else:  # claude (기본값) — 하이브리드
+            keep_segments = run_hybrid_editing(
                 usable_scenes, all_window_data, total_duration,
                 progress_callback=progress,
                 editing_comment=editing_comment,
+                target_minutes=target_minutes,
             )
         log(f"내러티브 편집 완료: {len(keep_segments)}개 KEEP")
 

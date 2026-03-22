@@ -398,7 +398,7 @@ export function registerAutocutIpc(): void {
         },
         (stderr) => {
           // Python 모듈 디버그 로그는 콘솔에만 출력
-          if (/^\[(?:analyze|claude|stage[12]|storyboard|stt|scene_detector|vad|merger)\]/.test(stderr)) {
+          if (/^\[(?:analyze|claude|stage[12]|storyboard|stt|scene_detector|scene_scorer|budget_selector|vad|merger)\]/.test(stderr)) {
             return
           }
           const lower = stderr.toLowerCase()
