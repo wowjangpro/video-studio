@@ -594,7 +594,7 @@ def main():
                         progress("stage2_vision", scaled, msg)
 
                     batch_results = tag_windows_batch_claude(
-                        video_path, vision_batch, batch_size=10,
+                        video_path, vision_batch, batch_size=20,
                         progress_callback=_claude_progress,
                     )
                     for bidx, tag in batch_results.items():

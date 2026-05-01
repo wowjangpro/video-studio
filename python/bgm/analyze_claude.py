@@ -82,7 +82,7 @@ def analyze_with_claude(frame_paths: list[str], preference: str = "") -> dict:
 
     cmd = [
         "claude", "-p",
-        "--model", "sonnet",
+        "--model", "claude-opus-4-7",
         "--output-format", "json",
         "--no-session-persistence",
     ]

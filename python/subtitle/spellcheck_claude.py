@@ -22,7 +22,7 @@ def _build_env() -> dict:
 def call_claude(prompt: str, timeout: int = 300) -> str:
     cmd = [
         "claude", "-p",
-        "--model", "sonnet",
+        "--model", "claude-opus-4-7",
         "--output-format", "json",
         "--no-session-persistence",
     ]

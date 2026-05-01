@@ -252,7 +252,7 @@ def _parse_claude_tag(tag: dict) -> tuple[str, str, str, str, str]:
 def tag_windows_batch_claude(
     video_path: str,
     windows: list[dict],
-    batch_size: int = 10,
+    batch_size: int = 20,
     progress_callback=None,
 ) -> dict[int, tuple[str, str, str, str, str]]:
     """Claude 비전으로 배치 태깅 — 여러 프레임을 한 번에 분석
@@ -317,7 +317,7 @@ def tag_windows_batch_claude(
                 pct = int((batch_idx / total_batches) * 100)
                 progress_callback(f"Claude 비전 분석 중... ({batch_idx+1}/{total_batches})", pct)
 
-            response = call_claude_vision(prompt, batch_paths, model="sonnet", timeout=180)
+            response = call_claude_vision(prompt, batch_paths, model="claude-opus-4-7", timeout=180)
 
             if not response:
                 _log(f"Claude 배치 {batch_idx+1} 응답 없음")

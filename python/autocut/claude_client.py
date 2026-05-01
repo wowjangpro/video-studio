@@ -39,7 +39,7 @@ def check_claude_available() -> bool:
 
 def call_claude_text(
     prompt: str,
-    model: str = "sonnet",
+    model: str = "claude-opus-4-7",
     json_schema: dict | None = None,
     timeout: int = 300,
     max_retries: int = 2,
@@ -108,7 +108,7 @@ def call_claude_text(
 def call_claude_vision(
     prompt: str,
     image_paths: list[str],
-    model: str = "sonnet",
+    model: str = "claude-opus-4-7",
     timeout: int = 180,
     max_retries: int = 2,
 ) -> str:

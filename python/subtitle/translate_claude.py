@@ -25,7 +25,7 @@ def call_claude(prompt: str, timeout: int = 300) -> str:
     """Claude CLI 호출"""
     cmd = [
         "claude", "-p",
-        "--model", "sonnet",
+        "--model", "claude-opus-4-7",
         "--output-format", "json",
         "--no-session-persistence",
     ]

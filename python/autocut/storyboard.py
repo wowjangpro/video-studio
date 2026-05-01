@@ -1594,7 +1594,7 @@ def run_narrative_editing_claude(
 
         _log(f"Claude 편집 호출 시작... (프롬프트 {len(prompt)}자, {len(scenes)}개 장면)")
         _log(f"=== Claude 프롬프트 ===\n{prompt}\n=== 프롬프트 끝 ===")
-        response = call_claude_text(prompt, model="sonnet", timeout=1800)
+        response = call_claude_text(prompt, model="claude-opus-4-7", timeout=1800)
         _log(f"=== Claude 응답 ({len(response)}자) ===\n{response}\n=== 응답 끝 ===")
     finally:
         # 임시 파일 정리
@@ -1667,7 +1667,7 @@ def run_narrative_editing_claude(
         )
 
         _log(f"Claude 재편집 호출... (프롬프트 {len(reedit_prompt)}자)")
-        reedit_response = call_claude_text(reedit_prompt, model="sonnet", timeout=1800)
+        reedit_response = call_claude_text(reedit_prompt, model="claude-opus-4-7", timeout=1800)
 
         if not reedit_response:
             _log("Claude 재편집: 응답 없음, 중단")
