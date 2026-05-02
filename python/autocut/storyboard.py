@@ -1274,8 +1274,8 @@ def run_narrative_editing(
     # 목표 시간 초과 시 재편집 (최대 3회)
     # 비교 기준: 비말소리 keep 시간
     # -------------------------------------------------------------------
-    MAX_REEDIT = 3
-    TOLERANCE = 1.15  # 15% 여유
+    MAX_REEDIT = 5
+    TOLERANCE = 1.07  # 7% 여유 (30분 목표 → 32분까지 허용)
 
     for reedit_round in range(MAX_REEDIT):
         current_min = nonspeech_min
@@ -1309,6 +1309,7 @@ def run_narrative_editing(
 
         _log(f"재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
 
+        prev_nonspeech_min = nonspeech_min
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
@@ -1324,6 +1325,11 @@ def run_narrative_editing(
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
         nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
         _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
+
+        # 수렴 정체 감지: 1분 이상 줄지 않으면 중단
+        if prev_nonspeech_min - nonspeech_min < 1.0:
+            _log(f"재편집 정체 감지 ({prev_nonspeech_min:.1f}→{nonspeech_min:.1f}분), 중단")
+            break
 
     return keep_segments
 
@@ -1589,40 +1595,51 @@ REEDIT_PROMPT_OLLAMA = """이전 편집 결과가 목표 시간을 초과했습�
 ]
 """
 
-REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 비말소리 합이 목표를 초과했습니다.
+REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 비말소리 합이 목표를 크게 초과했습니다.
+이번 라운드에서 **반드시 충분히 많이 줄여야** 합니다. 미흡하면 결과가 사용 불가합니다.
 
-현재 비말소리 합: {current_min}분 (목표: {target_minutes}분, 원본: {total_min}분)
-**비말소리 장면에서 {over_min}분을 추가로 줄여야 합니다.**
+현재 비말소리 합: **{current_min}분** (목표: **{target_minutes}분**, 초과: **{over_min}분**)
+원본: {total_min}분
 
-## 핵심 규칙
-- **말소리(★) 장면은 그대로 유지** — 길이 제한 없음
-- **모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 남기세요** (통째로 cut 금지)
-- 비말소리 장면(B-roll)에서 줄이세요
+## 절대 규칙
 
-## 현재 KEEP 장면 목록 (줄여야 할 대상)
+1. **이번 응답으로 비말소리 합이 {target_minutes}분 ± 2분이 되도록** 매우 적극적으로 추가 cut/partial을 적용하세요
+2. **말소리(★) 장면은 그대로 유지** (길이 제한 없음)
+3. **모든 영상 파일에서 1개 이상의 씬은 반드시 남기세요** (통째로 cut 금지)
+
+## 적극적 감축 전략 — 모두 적용
+
+- **반복 활동**: 같은 라벨/내용이 2개 이상이면 모션 가장 좋은 1개만 남기고 나머지 모두 cut
+- **긴 partial을 더 짧게**: 현재 partial keep_windows가 3개+면 1~2개로 줄임
+- **인접 비슷한 씬**: 시간 흐름상 가까이 있는 같은 활동은 1개만 keep, 다른 건 cut
+- **B-roll/풍경**: 핵심 1~2개만 남기고 cut
+- **저모션/정체 장면**: 모두 cut
+
+## 현재 KEEP 장면 목록 (이 중에서 골라서 줄이세요)
 
 {keep_summary}
 
-## 요청
+## 보호 대상 (cut 금지)
 
-위 KEEP 장면 중 추가로 CUT하거나 PARTIAL할 장면을 선택하세요.
-
-### 우선 CUT 대상
-- 반복적이거나 비핵심적인 장면
-- 짧은 비말소리 장면
-- 이미 비슷한 장면이 다른 곳에서 유지되는 경우
-
-### 보호 대상 (가급적 남기세요)
-- ★ 말소리가 높은 장면 (대사/해설 포함)
-- 내러티브 전환점 (도착, 셋업 시작, 식사, 마무리)
-- 유일한 활동 장면 (해당 활동이 이 장면에서만 나옴)
-
-내러티브 흐름이 끊기지 않도록 주의하세요.
+- ★ 말소리 장면 모두
+- 내러티브 전환점 (도착, 셋업 시작, 식사 시작, 마무리) 각 1개
+- 유일한 활동 (셋업/요리/불멍/풍경 각 1~2개)
 
 ## 출력 형식
 
-반드시 아래 형식의 JSON 객체만 출력하세요. 다른 텍스트를 섞지 마세요:
-{{"reasoning": "추가 CUT 판단 근거", "decisions": [{{"scene": 장면번호, "decision": "cut" 또는 "partial", "keep_windows": [윈도우번호, ...], "reason": "사유"}}]}}
+먼저 1~2문장 판단 근거. 그 다음 `=== JSON ===` 줄 다음에 JSON만 출력:
+
+```
+이번 라운드 판단: ...
+
+=== JSON ===
+{{"reasoning": "...", "decisions": [
+  {{"scene": 5, "decision": "cut", "reason": "S04와 동일한 풍경 반복"}},
+  {{"scene": 12, "decision": "partial", "keep_windows": [50], "reason": "긴 셋업을 1윈도우로 축소"}}
+]}}
+```
+
+**충분히 많은 항목을 출력하세요** — 한 두 개만 줄여서는 {over_min}분을 못 줄입니다.
 """
 
 
@@ -1826,8 +1843,8 @@ def run_narrative_editing_claude(
     # 목표 시간 초과 시 재편집 (최대 3회)
     # 비교 기준: 비말소리 keep 시간 (말소리는 보존이 우선이라 제외)
     # -------------------------------------------------------------------
-    MAX_REEDIT = 3
-    TOLERANCE = 1.15  # 15% 여유
+    MAX_REEDIT = 5
+    TOLERANCE = 1.07  # 7% 여유 (30분 목표 → 32분까지 허용)
 
     for reedit_round in range(MAX_REEDIT):
         current_min = nonspeech_min  # 비말소리만 비교
@@ -1870,6 +1887,7 @@ def run_narrative_editing_claude(
 
         _log(f"Claude 재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
 
+        prev_nonspeech_min = nonspeech_min
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
@@ -1885,6 +1903,11 @@ def run_narrative_editing_claude(
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
         nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
         _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
+
+        # 수렴 정체 감지: 1분 이상 줄지 않으면 중단 (LLM이 더 못 줄임)
+        if prev_nonspeech_min - nonspeech_min < 1.0:
+            _log(f"재편집 정체 감지 ({prev_nonspeech_min:.1f}→{nonspeech_min:.1f}분), 중단")
+            break
 
     return keep_segments
 
