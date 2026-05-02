@@ -287,36 +287,40 @@ def get_video_fps(path: str) -> float:
 def get_video_start_tc_seconds(path: str) -> float:
     """영상 metadata의 timecode를 초 단위로 반환.
 
-    카메라 영상은 보통 stream tag에 'timecode'를 가짐 (예: '13:35:41:00').
-    FCPXML asset의 start origin으로 사용해야 다빈치 매칭 성공.
-    매칭 가능한 TC가 없으면 0.0 반환.
+    카메라 영상의 timecode 위치는 다양:
+      - 비디오 스트림 tags.timecode
+      - data 스트림 (Timed Metadata Media Handler) tags.timecode  ← GoPro/소니 등
+      - format-level tags.timecode
+
+    모든 스트림을 검사하여 timecode를 찾는다.
     """
     try:
-        # 1차: stream level
+        # 모든 스트림 정보 + format tags
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries", "stream_tags=timecode",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            ["ffprobe", "-v", "quiet",
+             "-show_streams", "-show_format", "-of", "json", path],
             capture_output=True, text=True,
         )
-        tc = result.stdout.strip()
+        data = json.loads(result.stdout)
+
+        tc = ""
+        # 1차: 모든 스트림의 tags.timecode
+        for stream in data.get("streams", []):
+            t = stream.get("tags", {}).get("timecode", "")
+            if t:
+                tc = t
+                break
+        # 2차: format-level tags.timecode
         if not tc:
-            # 2차: format level
-            result2 = subprocess.run(
-                ["ffprobe", "-v", "quiet",
-                 "-show_entries", "format_tags=timecode",
-                 "-of", "default=noprint_wrappers=1:nokey=1", path],
-                capture_output=True, text=True,
-            )
-            tc = result2.stdout.strip()
+            tc = data.get("format", {}).get("tags", {}).get("timecode", "")
         if not tc:
             return 0.0
+
         # 파싱: HH:MM:SS:FF 또는 HH:MM:SS;FF (drop frame)
         parts = tc.replace(";", ":").split(":")
         if len(parts) != 4:
             return 0.0
         h, m, s, f = (int(x) for x in parts)
-        # 영상 자체 fps로 frame 부분 환산
         fps = get_video_fps(path) or 24.0
         return h * 3600 + m * 60 + s + f / fps
     except Exception:
