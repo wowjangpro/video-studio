@@ -133,11 +133,11 @@ def generate_edl(
             if clip_end <= clip_start:
                 continue
 
-            # 로컬 타임코드 (소스 파일 내 위치, 1시간 오프셋 관례)
+            # 로컬 타임코드 (소스 파일 내 위치, 0:00:00 시작 — 다빈치 metadata TC 매칭)
             local_start = clip_start - file_offset
             local_end = clip_end - file_offset
-            src_in = seconds_to_timecode(local_start + 3600, fps_int, drop_frame)
-            src_out = seconds_to_timecode(local_end + 3600, fps_int, drop_frame)
+            src_in = seconds_to_timecode(local_start, fps_int, drop_frame)
+            src_out = seconds_to_timecode(local_end, fps_int, drop_frame)
 
             # 레코드 타임코드 (타임라인상 위치)
             rec_in = seconds_to_timecode(record_offset, fps_int, drop_frame)
