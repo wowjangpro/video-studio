@@ -23,6 +23,7 @@ from scene_detector import cross_validate_all, group_windows_to_scenes, filter_n
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import generate_edl
+from fcpxml_export import generate_fcpxml
 
 
 def log(msg: str):
@@ -469,6 +470,14 @@ def main():
                 with open(edl_path, "w", encoding="utf-8") as ef:
                     ef.write(edl_content)
                 log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
+
+            # FCPXML 생성 (다빈치 권장 — reference id 매칭으로 metadata TC 무관)
+            fcpxml_path = srt_path.replace(".srt", ".fcpxml")
+            fcpxml_content = generate_fcpxml(validated, files, fps=24)
+            if fcpxml_content:
+                with open(fcpxml_path, "w", encoding="utf-8") as ff:
+                    ff.write(fcpxml_content)
+                log(f"FCPXML 생성: {fcpxml_path}")
 
             elapsed = time.time() - t_start
             speech_sec, nonspeech_sec = calc_keep_breakdown(validated, all_window_data)
