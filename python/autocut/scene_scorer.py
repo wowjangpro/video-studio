@@ -76,15 +76,18 @@ def _motion_visual_score(scene: dict, all_windows: list[dict]) -> float:
         return 0.0
 
     # 모션 점수 (0~10점): avg_motion 기준
+    # 저모션 페널티 강화 — 정체 장면은 시청자가 지루하므로 점수 더 낮춤
     avg_motion = scene.get("avg_motion", 0.0)
     if avg_motion >= 0.08:
         motion_pts = 10.0
     elif avg_motion >= 0.03:
         motion_pts = 7.0
     elif avg_motion >= 0.01:
-        motion_pts = 4.0
-    else:
+        motion_pts = 3.0
+    elif avg_motion >= 0.005:
         motion_pts = 1.0
+    else:
+        motion_pts = 0.0
 
     # brightness 다양성 (0~10점): 윈도우 간 brightness 변화 폭
     brightnesses = []

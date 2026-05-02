@@ -37,7 +37,12 @@ def _format_duration(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _dedup_scenes(scenes: list[dict]) -> list[dict]:
-    """같은 action + 5분 이내 장면 중 score 최고만 남기고 나머지 제거
+    """같은 action + 5분 이내 장면 중 모션이 가장 활발한 장면을 우선 보존
+
+    선택 우선순위:
+      1. has_speech (말소리 있는 장면 우선)
+      2. avg_motion (모션 높은 장면 우선) — 시청자가 덜 지루한 화면
+      3. score (동률 시 점수 높은 쪽)
 
     cooking은 예외 — 준비/조리/완성이 각각 다른 단계이므로 dedup 제외.
     반환: dedup 후 유지할 장면 리스트 (원본 리스트는 변경하지 않음)
@@ -71,7 +76,15 @@ def _dedup_scenes(scenes: list[dict]) -> list[dict]:
         for cluster in clusters:
             if len(cluster) <= 1:
                 continue
-            best = max(cluster, key=lambda s: s.get("score", 0))
+            # 우선순위: 말소리 > 모션 > 점수
+            best = max(
+                cluster,
+                key=lambda s: (
+                    1 if s.get("has_speech") else 0,
+                    s.get("avg_motion", 0.0),
+                    s.get("score", 0),
+                ),
+            )
             for scene in cluster:
                 if scene["id"] != best["id"]:
                     dedup_cut_ids.add(scene["id"])
