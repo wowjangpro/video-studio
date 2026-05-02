@@ -215,6 +215,23 @@ def get_video_duration(path: str) -> float:
         return 0.0
 
 
+def get_video_fps(path: str) -> float:
+    """ffprobe로 영상 fps 조회 (r_frame_rate, 분수 형식)"""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path],
+            capture_output=True, text=True,
+        )
+        rate = result.stdout.strip()
+        if "/" in rate:
+            num, den = rate.split("/")
+            return float(num) / float(den) if float(den) > 0 else 0.0
+        return float(rate)
+    except Exception:
+        return 0.0
+
+
 def extract_audio_wav(video_path: str, output_path: str):
     """FFmpeg로 16kHz WAV 추출"""
     subprocess.run(
@@ -393,13 +410,16 @@ def main():
                 srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
             write_srt(validated, srt_path)
 
-            # EDL 생성
+            # EDL 생성 (첫 영상의 실제 fps 사용)
             edl_path = srt_path.replace(".srt", ".edl")
-            edl_content = generate_edl(validated, files)
+            edl_fps = get_video_fps(files[0]["path"]) if files else 24.0
+            if edl_fps <= 0:
+                edl_fps = 24.0
+            edl_content = generate_edl(validated, files, fps=edl_fps)
             if edl_content:
                 with open(edl_path, "w", encoding="utf-8") as ef:
                     ef.write(edl_content)
-                log(f"EDL 생성: {edl_path}")
+                log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
 
             elapsed = time.time() - t_start
             log(f"재편집 완료: {len(validated)}개 KEEP, SRT={srt_path}, 총 {elapsed:.1f}s 소요")
@@ -808,13 +828,16 @@ def main():
             srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
         write_srt(validated, srt_path)
 
-        # EDL 생성
+        # EDL 생성 (첫 영상의 실제 fps 사용)
         edl_path = srt_path.replace(".srt", ".edl")
-        edl_content = generate_edl(validated, files)
+        edl_fps = get_video_fps(files[0]["path"]) if files else 24.0
+        if edl_fps <= 0:
+            edl_fps = 24.0
+        edl_content = generate_edl(validated, files, fps=edl_fps)
         if edl_content:
             with open(edl_path, "w", encoding="utf-8") as ef:
                 ef.write(edl_content)
-            log(f"EDL 생성: {edl_path}")
+            log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
 
         # 완료
         elapsed = time.time() - t_start
