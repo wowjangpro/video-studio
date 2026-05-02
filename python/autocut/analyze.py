@@ -461,11 +461,9 @@ def main():
                 srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
             write_srt(validated, srt_path)
 
-            # EDL 생성 (첫 영상의 실제 fps 사용)
+            # EDL 생성 (24fps NDF 고정)
             edl_path = srt_path.replace(".srt", ".edl")
-            edl_fps = get_video_fps(files[0]["path"]) if files else 24.0
-            if edl_fps <= 0:
-                edl_fps = 24.0
+            edl_fps = 24.0  # EDL은 항상 24fps NDF (다빈치 timeline 24fps와 매칭)
             edl_content = generate_edl(validated, files, fps=edl_fps)
             if edl_content:
                 with open(edl_path, "w", encoding="utf-8") as ef:
@@ -884,11 +882,9 @@ def main():
             srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
         write_srt(validated, srt_path)
 
-        # EDL 생성 (첫 영상의 실제 fps 사용)
+        # EDL 생성 (24fps NDF 고정)
         edl_path = srt_path.replace(".srt", ".edl")
-        edl_fps = get_video_fps(files[0]["path"]) if files else 24.0
-        if edl_fps <= 0:
-            edl_fps = 24.0
+        edl_fps = 24.0  # EDL은 항상 24fps NDF (다빈치 timeline 24fps와 매칭)
         edl_content = generate_edl(validated, files, fps=edl_fps)
         if edl_content:
             with open(edl_path, "w", encoding="utf-8") as ef:
