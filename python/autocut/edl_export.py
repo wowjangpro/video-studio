@@ -92,6 +92,11 @@ def generate_edl(
     if not segments or not files:
         return ""
 
+    # 다빈치 리졸브 timeline의 default starting TC가 01:00:00:00이므로
+    # record TC도 같은 오프셋으로 시작하면 conform이 자연스럽게 맞는다.
+    # (source TC는 영상 metadata TC와 맞추기 위해 00:00:00 시작 유지)
+    RECORD_TC_OFFSET_SEC = 3600
+
     fps_int, drop_frame, fcm = _resolve_fps(fps)
 
     # 파일별 누적 오프셋 배열 (bisect용)
@@ -139,10 +144,10 @@ def generate_edl(
             src_in = seconds_to_timecode(local_start, fps_int, drop_frame)
             src_out = seconds_to_timecode(local_end, fps_int, drop_frame)
 
-            # 레코드 타임코드 (타임라인상 위치)
-            rec_in = seconds_to_timecode(record_offset, fps_int, drop_frame)
+            # 레코드 타임코드 (타임라인상 위치, 01:00:00 시작 — 다빈치 default 매칭)
+            rec_in = seconds_to_timecode(RECORD_TC_OFFSET_SEC + record_offset, fps_int, drop_frame)
             clip_duration = clip_end - clip_start
-            rec_out = seconds_to_timecode(record_offset + clip_duration, fps_int, drop_frame)
+            rec_out = seconds_to_timecode(RECORD_TC_OFFSET_SEC + record_offset + clip_duration, fps_int, drop_frame)
 
             # 유니크 reel name (인덱스 기반, 파일명 충돌 방지)
             reel = file_reels[fi]
