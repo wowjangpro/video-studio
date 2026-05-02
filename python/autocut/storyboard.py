@@ -813,6 +813,124 @@ def _protect_speech_in_partial(
 
 
 # ---------------------------------------------------------------------------
+# 비말소리 시간 계산 (목표 시간 비교용)
+# ---------------------------------------------------------------------------
+
+def _calc_nonspeech_keep_min(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> float:
+    """현재 KEEP 결과 중 말소리 없는 윈도우의 합 (분 단위)
+
+    target_minutes 비교 기준 — '말하는 장면 제외한 나머지 합'.
+    """
+    scene_map = {s["id"]: s for s in scenes}
+    nonspeech_sec = 0.0
+
+    for d in decisions:
+        decision = d.get("decision", "keep")
+        if decision == "cut":
+            continue
+        scene = scene_map.get(d.get("scene", -1))
+        if not scene:
+            continue
+
+        if decision == "partial":
+            wids = d.get("keep_windows", [])
+        else:  # keep
+            wids = scene.get("window_ids", [])
+
+        for wid in wids:
+            if 0 <= wid < len(all_windows):
+                w = all_windows[wid]
+                if not window_has_speech(w):
+                    nonspeech_sec += w.get("end", 0) - w.get("start", 0)
+
+    return nonspeech_sec / 60.0
+
+
+# ---------------------------------------------------------------------------
+# 모든 영상 파일에서 최소 1씬 보장
+# ---------------------------------------------------------------------------
+
+def _ensure_all_files_present(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """각 file_index에서 최소 1개 씬이 keep/partial 상태로 살아있도록 보장.
+
+    LLM이 한 영상을 통째로 cut하면 시간 흐름에 공백이 생기므로, 해당 영상의
+    가장 점수 높은 씬을 partial(1윈도우)로 복원한다. 흐름이 끊어지지 않게.
+    """
+    scene_map = {s["id"]: s for s in scenes}
+
+    # 결정별 정보
+    decision_by_scene = {d["scene"]: d for d in decisions}
+
+    # file_index별 keep/partial 씬 개수
+    file_keep_count: dict[int, int] = {}
+    file_scenes: dict[int, list[dict]] = {}
+
+    for scene in scenes:
+        fi = scene.get("file_index", -1)
+        if fi < 0:
+            continue
+        file_scenes.setdefault(fi, []).append(scene)
+
+        d = decision_by_scene.get(scene["id"])
+        decision = d.get("decision", "keep") if d else "keep"
+        if decision != "cut":
+            file_keep_count[fi] = file_keep_count.get(fi, 0) + 1
+
+    # 살아있는 씬이 0개인 파일 찾기
+    restored = 0
+    for fi, fscenes in file_scenes.items():
+        if file_keep_count.get(fi, 0) > 0:
+            continue
+
+        # 후보 선택: 점수 높은 씬 (없으면 모션 높은 씬, 그것도 없으면 첫 씬)
+        candidate = max(
+            fscenes,
+            key=lambda s: (s.get("score", 0), s.get("avg_motion", 0.0)),
+        )
+
+        # 1윈도우 partial로 복원 (모션 높은 윈도우 우선)
+        wids = candidate.get("window_ids", [])
+        if not wids:
+            continue
+
+        # 모션이 가장 높은 윈도우 1개 선택
+        best_wid = max(
+            wids,
+            key=lambda w: all_windows[w].get("motion", 0.0) if 0 <= w < len(all_windows) else 0.0,
+        )
+
+        new_decision = {
+            "scene": candidate["id"],
+            "decision": "partial",
+            "keep_windows": [best_wid],
+            "reason": "(자동복원) 영상이 통째로 cut되지 않게 짧게라도 보존",
+        }
+
+        # 기존 결정 교체 또는 추가
+        existing = decision_by_scene.get(candidate["id"])
+        if existing:
+            existing["decision"] = "partial"
+            existing["keep_windows"] = [best_wid]
+            existing["reason"] = new_decision["reason"]
+        else:
+            decisions.append(new_decision)
+        restored += 1
+
+    if restored:
+        _log(f"파일 보존: {restored}개 영상에서 통째 cut 방지를 위해 1씬 복원")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
 # PARTIAL / KEEP / CUT 적용
 # ---------------------------------------------------------------------------
 
@@ -1134,6 +1252,9 @@ def run_narrative_editing(
     # 말소리 보호 안전망 (PARTIAL에서 누락된 ★ 윈도우 복원)
     decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
 
+    # 모든 영상 파일에 최소 1씬 보장 (흐름 끊김 방지)
+    decisions = _ensure_all_files_present(decisions, scenes, all_windows)
+
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
     partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1146,16 +1267,18 @@ def run_narrative_editing(
     keep_segments = _apply_decisions(decisions, scenes, all_windows)
 
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
-    _log(f"편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+    nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
+    _log(f"편집 완료: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
     # -------------------------------------------------------------------
     # 목표 시간 초과 시 재편집 (최대 3회)
+    # 비교 기준: 비말소리 keep 시간
     # -------------------------------------------------------------------
     MAX_REEDIT = 3
     TOLERANCE = 1.15  # 15% 여유
 
     for reedit_round in range(MAX_REEDIT):
-        current_min = total_keep / 60
+        current_min = nonspeech_min
         if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
             break
 
@@ -1190,6 +1313,7 @@ def run_narrative_editing(
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+        decisions = _ensure_all_files_present(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1198,7 +1322,8 @@ def run_narrative_editing(
 
         keep_segments = _apply_decisions(decisions, scenes, all_windows)
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
-        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+        nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
     return keep_segments
 
@@ -1464,10 +1589,15 @@ REEDIT_PROMPT_OLLAMA = """이전 편집 결과가 목표 시간을 초과했습�
 ]
 """
 
-REEDIT_PROMPT_CLAUDE = """이전 편집 결과가 목표 시간을 초과했습니다.
+REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 비말소리 합이 목표를 초과했습니다.
 
-현재 결과: {current_min}분 (목표: {target_minutes}분, 원본: {total_min}분)
-**{over_min}분을 추가로 줄여야 합니다.**
+현재 비말소리 합: {current_min}분 (목표: {target_minutes}분, 원본: {total_min}분)
+**비말소리 장면에서 {over_min}분을 추가로 줄여야 합니다.**
+
+## 핵심 규칙
+- **말소리(★) 장면은 그대로 유지** — 길이 제한 없음
+- **모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 남기세요** (통째로 cut 금지)
+- 비말소리 장면(B-roll)에서 줄이세요
 
 ## 현재 KEEP 장면 목록 (줄여야 할 대상)
 
@@ -1600,28 +1730,25 @@ def run_narrative_editing_claude(
 
         # 분량 가이드: target_minutes가 있으면 그걸 사용, 없으면 기본 50~70%
         if target_minutes > 0:
-            keep_ratio = target_minutes / max(total_min, 1)
             default_guide = (
                 f"## 목표 시간 — 절대 규칙\n\n"
-                f"**완성본은 반드시 {target_minutes}분 ± 2분 안으로 만드세요.** "
-                f"(원본 {total_min}분 → {target_minutes}분, 유지율 {int(keep_ratio * 100)}%)\n\n"
+                f"**비말소리(B-roll) 장면의 합이 약 {target_minutes}분이 되도록** 편집하세요.\n"
+                f"- 말소리(★) 장면은 길이 제한 없이 모두 보존 (정보 전달이 우선)\n"
+                f"- 말소리 장면을 제외한 풍경/셋업/요리/불멍/이동 등 비말소리 장면의 합이 {target_minutes}분 ± 2분\n\n"
+                f"**모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 살려두세요** — "
+                f"한 영상이 통째로 빠지면 시간 흐름에 공백이 생깁니다. "
+                f"덜어내야 한다면 partial로 1~2윈도우만 남기세요.\n\n"
+                f"비말소리 합을 줄이는 방법:\n"
+                f"- 비말소리 씬은 기본적으로 PARTIAL (윈도우 1~2개만)\n"
+                f"- 같은 라벨 반복 씬은 **모션 가장 높은 1개만** 남기고 나머지 CUT\n"
+                f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지, 가장 좋은 1개)\n"
             )
-            if keep_ratio < 0.35:
-                default_guide += (
-                    f"⚠️ 매우 낮은 유지율({int(keep_ratio * 100)}%)입니다. 다음을 적극 적용하세요:\n"
-                    f"- 비말소리 씬은 **대부분 CUT 또는 1윈도우 PARTIAL**\n"
-                    f"- 같은 라벨 반복 씬은 **모션 가장 높은 1개만** 남기고 나머지 CUT\n"
-                    f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지)\n"
-                    f"- 말소리 씬도 길면 핵심 부분만 partial 고려\n"
-                )
-            elif keep_ratio < 0.55:
-                default_guide += (
-                    f"낮은 유지율({int(keep_ratio * 100)}%)입니다. 비말소리 씬은 적극 CUT, "
-                    f"긴 씬은 PARTIAL로 핵심 1~2윈도우만 남기세요.\n"
-                )
-            _log(f"목표 시간 설정: {target_minutes}분 (유지율 {keep_ratio:.0%})")
+            _log(f"목표 시간 설정: 비말소리 합 {target_minutes}분")
         else:
-            default_guide = f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**"
+            default_guide = (
+                f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**\n"
+                f"모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 살려두세요."
+            )
         comment_section = ""
         if editing_comment:
             comment_section = f"\n\n## 편집자 요청 (이 요청이 최우선입니다 — 위의 기본 가이드라인보다 우선 적용하세요)\n\n{editing_comment}\n"
@@ -1681,6 +1808,7 @@ def run_narrative_editing_claude(
     decisions = _fill_missing_scenes(decisions, scenes)
     decisions = _cap_long_scenes(decisions, scenes, all_windows)
     decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+    decisions = _ensure_all_files_present(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -1691,26 +1819,28 @@ def run_narrative_editing_claude(
     # 결정 적용 -> 세그먼트 생성
     keep_segments = _apply_decisions(decisions, scenes, all_windows)
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
-    _log(f"Claude 편집 완료: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+    nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
+    _log(f"Claude 편집 완료: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
     # -------------------------------------------------------------------
     # 목표 시간 초과 시 재편집 (최대 3회)
+    # 비교 기준: 비말소리 keep 시간 (말소리는 보존이 우선이라 제외)
     # -------------------------------------------------------------------
     MAX_REEDIT = 3
     TOLERANCE = 1.15  # 15% 여유
 
     for reedit_round in range(MAX_REEDIT):
-        current_min = total_keep / 60
+        current_min = nonspeech_min  # 비말소리만 비교
         if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
             break
 
         over_min = int(current_min - target_minutes)
-        _log(f"목표 초과: {current_min:.1f}분 > {target_minutes}분 (Claude 재편집 {reedit_round + 1}/{MAX_REEDIT})")
+        _log(f"비말소리 시간 초과: {current_min:.1f}분 > {target_minutes}분 (Claude 재편집 {reedit_round + 1}/{MAX_REEDIT})")
 
         if progress_callback:
             progress_callback(
                 "editing", 93 + reedit_round,
-                f"목표 초과 ({current_min:.0f}분>{target_minutes}분), Claude 재편집 {reedit_round + 1}차...",
+                f"비말소리 초과 ({current_min:.0f}분>{target_minutes}분), Claude 재편집 {reedit_round + 1}차...",
             )
 
         keep_summary = _build_keep_summary(decisions, scenes, target_minutes)
@@ -1744,6 +1874,7 @@ def run_narrative_editing_claude(
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+        decisions = _ensure_all_files_present(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1752,7 +1883,8 @@ def run_narrative_editing_claude(
 
         keep_segments = _apply_decisions(decisions, scenes, all_windows)
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
-        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, {total_keep / 60:.1f}분")
+        nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
     return keep_segments
 

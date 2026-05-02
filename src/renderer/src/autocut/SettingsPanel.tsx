@@ -53,6 +53,23 @@ export default function SettingsPanel(): JSX.Element {
           maxLength={500}
         />
         <div className="settings-panel__controls">
+          <label className="settings-panel__target" title="완성본 목표 시간(분). 0이면 자동(50~70%).">
+            목표
+            <input
+              type="number"
+              className="settings-panel__target-input"
+              min={0}
+              max={300}
+              step={5}
+              value={targetMinutes || ''}
+              placeholder="자동"
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                updateSettings({ targetMinutes: Number.isFinite(v) ? v : 0 })
+              }}
+            />
+            분
+          </label>
           <select
             className="settings-panel__engine-select"
             value={aiEngine}
