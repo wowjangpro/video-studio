@@ -19,7 +19,7 @@ from stage1 import analyze_file_stage1
 from vad_detector import detect_speech_regions
 from stt import transcribe_speech_regions, map_transcripts_to_windows
 from stage2 import tag_window_context, tag_windows_batch_claude
-from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary
+from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary, window_has_speech
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import generate_edl
@@ -131,6 +131,57 @@ def emit(data: dict):
     if _progress_file:
         _progress_file.write(line + "\n")
         _progress_file.flush()
+
+
+def calc_keep_breakdown(segments: list[dict], all_windows: list[dict]) -> tuple[float, float]:
+    """KEEP 세그먼트 시간을 (말소리 초, 비말소리 초)로 분해.
+
+    각 세그먼트가 걸치는 윈도우들의 has_speech 여부를 기준으로 시간 분배한다.
+    윈도우 매핑이 어려우면 segment의 label로 추정 ("talking" → 말소리).
+    """
+    if not segments:
+        return 0.0, 0.0
+
+    speech_sec = 0.0
+    nonspeech_sec = 0.0
+
+    for seg in segments:
+        g_start = seg.get("globalStart", 0.0)
+        g_end = seg.get("globalEnd", 0.0)
+        dur = max(0.0, g_end - g_start)
+        if dur <= 0:
+            continue
+
+        # 세그먼트가 겹치는 윈도우들 찾기 + 겹친 시간 비율로 분배
+        seg_speech = 0.0
+        seg_nonspeech = 0.0
+        for w in all_windows:
+            w_start = w.get("globalStart", w.get("start", 0.0))
+            w_end = w.get("globalEnd", w.get("end", 0.0))
+            overlap = max(0.0, min(g_end, w_end) - max(g_start, w_start))
+            if overlap <= 0:
+                continue
+            if window_has_speech(w):
+                seg_speech += overlap
+            else:
+                seg_nonspeech += overlap
+
+        # 윈도우 매핑이 거의 없으면 라벨 기반 추정
+        mapped = seg_speech + seg_nonspeech
+        if mapped < dur * 0.5:
+            label = (seg.get("label") or "").lower()
+            if label == "talking":
+                seg_speech = max(seg_speech, dur)
+            else:
+                seg_nonspeech = max(seg_nonspeech, dur)
+
+        # 비율 정규화 (윈도우 합이 dur과 약간 어긋날 수 있음)
+        total = seg_speech + seg_nonspeech
+        if total > 0:
+            speech_sec += seg_speech * dur / total
+            nonspeech_sec += seg_nonspeech * dur / total
+
+    return speech_sec, nonspeech_sec
 
 
 def progress(stage: str, percent: int, message: str):
@@ -422,7 +473,10 @@ def main():
                 log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
 
             elapsed = time.time() - t_start
-            log(f"재편집 완료: {len(validated)}개 KEEP, SRT={srt_path}, 총 {elapsed:.1f}s 소요")
+            speech_sec, nonspeech_sec = calc_keep_breakdown(validated, all_window_data)
+            log(f"재편집 완료: {len(validated)}개 KEEP, SRT={srt_path}, "
+                f"말소리 {speech_sec / 60:.1f}분 + 비말소리 {nonspeech_sec / 60:.1f}분, "
+                f"총 {elapsed:.1f}s 소요")
             emit({
                 "type": "complete",
                 "keepSegments": validated,
@@ -430,6 +484,8 @@ def main():
                 "edlPath": edl_path,
                 "totalKeep": len(validated),
                 "totalDuration": cached_duration,
+                "keepSpeechSec": speech_sec,
+                "keepNonspeechSec": nonspeech_sec,
             })
             return
 
@@ -841,7 +897,10 @@ def main():
 
         # 완료
         elapsed = time.time() - t_start
-        log(f"전체 완료: {len(validated)}개 KEEP, SRT={srt_path}, 총 {elapsed:.1f}s 소요")
+        speech_sec, nonspeech_sec = calc_keep_breakdown(validated, all_window_data)
+        log(f"전체 완료: {len(validated)}개 KEEP, SRT={srt_path}, "
+            f"말소리 {speech_sec / 60:.1f}분 + 비말소리 {nonspeech_sec / 60:.1f}분, "
+            f"총 {elapsed:.1f}s 소요")
         emit({
             "type": "complete",
             "keepSegments": validated,
@@ -849,6 +908,8 @@ def main():
             "edlPath": edl_path,
             "totalKeep": len(validated),
             "totalDuration": total_duration,
+            "keepSpeechSec": speech_sec,
+            "keepNonspeechSec": nonspeech_sec,
         })
 
         if os.path.exists(progress_path):

@@ -23,6 +23,8 @@ export default function AutocutModule(): JSX.Element {
   const keepSegments = useAutocutStore((s) => s.keepSegments)
   const srtPath = useAutocutStore((s) => s.srtPath)
   const edlPath = useAutocutStore((s) => s.edlPath)
+  const keepSpeechSec = useAutocutStore((s) => s.keepSpeechSec)
+  const keepNonspeechSec = useAutocutStore((s) => s.keepNonspeechSec)
   const previewMode = useAutocutStore((s) => s.previewMode)
   const previewPaused = useAutocutStore((s) => s.previewPaused)
   const startPreview = useAutocutStore((s) => s.startPreview)
@@ -51,7 +53,7 @@ export default function AutocutModule(): JSX.Element {
       addWindowResult(data)
     })
     const cleanupComplete = window.electronAPI.autocut.onAnalysisComplete((data) => {
-      setAnalysisComplete(data.keepSegments, data.srtPath, data.edlPath)
+      setAnalysisComplete(data.keepSegments, data.srtPath, data.edlPath, data.keepSpeechSec, data.keepNonspeechSec)
     })
     const cleanupError = window.electronAPI.autocut.onError((message) => {
       setError(message)
@@ -260,9 +262,16 @@ export default function AutocutModule(): JSX.Element {
                   <span className="settings-panel__info">
                     {keepSegments.length}개 KEEP — {(() => {
                       const totalSec = keepSegments.reduce((sum, s) => sum + (s.globalEnd - s.globalStart), 0)
-                      const m = Math.floor(totalSec / 60)
-                      const s = Math.floor(totalSec % 60)
-                      return `${m}분 ${s}초`
+                      const fmt = (sec: number): string => {
+                        const m = Math.floor(sec / 60)
+                        const s = Math.floor(sec % 60)
+                        return `${m}분 ${s}초`
+                      }
+                      const hasBreakdown = keepSpeechSec > 0 || keepNonspeechSec > 0
+                      if (hasBreakdown) {
+                        return `${fmt(totalSec)} (말 ${fmt(keepSpeechSec)} + 비말 ${fmt(keepNonspeechSec)})`
+                      }
+                      return fmt(totalSec)
                     })()}
                     {edlPath && ' | EDL 생성됨'}
                   </span>

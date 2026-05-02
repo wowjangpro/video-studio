@@ -380,7 +380,9 @@ export function registerAutocutIpc(): void {
                 srtPath: data.srtPath,
                 edlPath: data.edlPath || null,
                 totalKeep: data.totalKeep,
-                totalDuration: data.totalDuration
+                totalDuration: data.totalDuration,
+                keepSpeechSec: data.keepSpeechSec ?? 0,
+                keepNonspeechSec: data.keepNonspeechSec ?? 0
               })
               analysisProcess = null
               resourceManager.release('autocut')
