@@ -1290,12 +1290,12 @@ def run_hybrid_editing(
     if progress_callback:
         progress_callback("editing", 83, "Claude 편집 중...")
 
-    # 전체 장면을 Claude에 전달 — Claude가 쓸모없는 장면만 CUT
+    # 전체 장면을 Claude에 전달 — target_minutes가 있으면 가이드 + 재편집 루프 동작
     keep_segments = run_narrative_editing_claude(
         scenes, all_windows, total_duration,
         progress_callback=progress_callback,
         editing_comment=editing_comment,
-        target_minutes=0,  # 목표 시간 없음
+        target_minutes=target_minutes,
     )
 
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
@@ -1331,7 +1331,11 @@ __DETAIL_FILES__
 
 ## 작업 — 모든 씬을 분류
 
-원본 __TOTAL_DURATION__. 모든 씬에 대해 다음 셋 중 하나로 결정하세요:
+원본 __TOTAL_DURATION__.
+
+__DURATION_GUIDE__
+
+모든 씬에 대해 다음 셋 중 하나로 결정하세요:
 
 - **keep**: 씬 전체 유지. 단 **씬 길이가 윈도우 1개(10초) 이하**일 때만 사용.
 - **partial**: 핵심 윈도우만 골라 유지 (나머지 자동 삭제). **윈도우 2개 이상 씬의 기본값**.
@@ -1597,9 +1601,24 @@ def run_narrative_editing_claude(
         # 분량 가이드: target_minutes가 있으면 그걸 사용, 없으면 기본 50~70%
         if target_minutes > 0:
             keep_ratio = target_minutes / max(total_min, 1)
-            default_guide = f"**완성본은 반드시 약 {target_minutes}분을 목표로 하세요.** (원본 {total_min}분, 약 {int(keep_ratio * 100)}%만 유지)"
-            if keep_ratio < 0.5:
-                default_guide += f"\n목표가 원본의 {int(keep_ratio * 100)}%이므로 과감하게 CUT하세요. 말소리 없는 장면은 적극적으로 CUT하고, 긴 장면은 PARTIAL로 핵심만 남기세요."
+            default_guide = (
+                f"## 목표 시간 — 절대 규칙\n\n"
+                f"**완성본은 반드시 {target_minutes}분 ± 2분 안으로 만드세요.** "
+                f"(원본 {total_min}분 → {target_minutes}분, 유지율 {int(keep_ratio * 100)}%)\n\n"
+            )
+            if keep_ratio < 0.35:
+                default_guide += (
+                    f"⚠️ 매우 낮은 유지율({int(keep_ratio * 100)}%)입니다. 다음을 적극 적용하세요:\n"
+                    f"- 비말소리 씬은 **대부분 CUT 또는 1윈도우 PARTIAL**\n"
+                    f"- 같은 라벨 반복 씬은 **모션 가장 높은 1개만** 남기고 나머지 CUT\n"
+                    f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지)\n"
+                    f"- 말소리 씬도 길면 핵심 부분만 partial 고려\n"
+                )
+            elif keep_ratio < 0.55:
+                default_guide += (
+                    f"낮은 유지율({int(keep_ratio * 100)}%)입니다. 비말소리 씬은 적극 CUT, "
+                    f"긴 씬은 PARTIAL로 핵심 1~2윈도우만 남기세요.\n"
+                )
             _log(f"목표 시간 설정: {target_minutes}분 (유지율 {keep_ratio:.0%})")
         else:
             default_guide = f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**"
