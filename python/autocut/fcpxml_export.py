@@ -55,16 +55,18 @@ def generate_fcpxml(
 
     file_offsets = [f["offset"] for f in files]
 
-    # asset 정의 (각 영상 파일 = 하나의 asset)
+    # asset 정의 — start는 영상 metadata TC 기준 (다빈치 매칭용)
     asset_lines = []
     for i, f in enumerate(files):
         asset_id = f"r{i + 2}"  # r1은 format이라 r2부터
         name = os.path.splitext(f["name"])[0]
         url = _file_url(f["path"])
         dur = _to_fraction(f["duration"], fps)
+        tc_seconds = f.get("tc_seconds", 0.0)
+        start_tc = _to_fraction(tc_seconds, fps) if tc_seconds > 0 else "0s"
         asset_lines.append(
             f'    <asset id="{asset_id}" name="{html.escape(name)}" '
-            f'src="{url}" start="0s" duration="{dur}" '
+            f'src="{url}" start="{start_tc}" duration="{dur}" '
             f'hasVideo="1" hasAudio="1" format="r1" '
             f'audioSources="1" audioChannels="2" audioRate="48000"/>'
         )
@@ -96,6 +98,11 @@ def generate_fcpxml(
             local_start = clip_start - file_offset
             clip_duration = clip_end - clip_start
 
+            # asset의 start origin이 영상 metadata TC이므로,
+            # asset-clip의 start는 (metadata TC + 영상 내 위치) 가 되어야 한다.
+            tc_seconds = f.get("tc_seconds", 0.0)
+            source_start = tc_seconds + local_start
+
             asset_id = f"r{fi + 2}"
             label = seg.get("label", "")
             clip_name = f["name"]
@@ -104,7 +111,7 @@ def generate_fcpxml(
             clip_lines.append(
                 f'        <asset-clip ref="{asset_id}" '
                 f'offset="{_to_fraction(record_offset, fps)}" '
-                f'start="{_to_fraction(local_start, fps)}" '
+                f'start="{_to_fraction(source_start, fps)}" '
                 f'duration="{_to_fraction(clip_duration, fps)}" '
                 f'name="{html.escape(clip_name)}" '
                 f'tcFormat="NDF">'

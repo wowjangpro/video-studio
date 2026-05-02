@@ -284,6 +284,45 @@ def get_video_fps(path: str) -> float:
         return 0.0
 
 
+def get_video_start_tc_seconds(path: str) -> float:
+    """영상 metadata의 timecode를 초 단위로 반환.
+
+    카메라 영상은 보통 stream tag에 'timecode'를 가짐 (예: '13:35:41:00').
+    FCPXML asset의 start origin으로 사용해야 다빈치 매칭 성공.
+    매칭 가능한 TC가 없으면 0.0 반환.
+    """
+    try:
+        # 1차: stream level
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream_tags=timecode",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True,
+        )
+        tc = result.stdout.strip()
+        if not tc:
+            # 2차: format level
+            result2 = subprocess.run(
+                ["ffprobe", "-v", "quiet",
+                 "-show_entries", "format_tags=timecode",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True,
+            )
+            tc = result2.stdout.strip()
+        if not tc:
+            return 0.0
+        # 파싱: HH:MM:SS:FF 또는 HH:MM:SS;FF (drop frame)
+        parts = tc.replace(";", ":").split(":")
+        if len(parts) != 4:
+            return 0.0
+        h, m, s, f = (int(x) for x in parts)
+        # 영상 자체 fps로 frame 부분 환산
+        fps = get_video_fps(path) or 24.0
+        return h * 3600 + m * 60 + s + f / fps
+    except Exception:
+        return 0.0
+
+
 def extract_audio_wav(video_path: str, output_path: str):
     """FFmpeg로 16kHz WAV 추출"""
     subprocess.run(
@@ -297,7 +336,10 @@ def extract_audio_wav(video_path: str, output_path: str):
 
 
 def scan_video_files(folder_path: str) -> list[dict]:
-    """폴더 내 영상 파일 검색 및 시간순 정렬"""
+    """폴더 내 영상 파일 검색 및 시간순 정렬
+
+    각 파일에 metadata timecode(`tc_seconds`)도 함께 저장 — FCPXML 매칭에 사용.
+    """
     files = []
     for name in sorted(os.listdir(folder_path)):
         ext = os.path.splitext(name)[1].lower()
@@ -305,7 +347,13 @@ def scan_video_files(folder_path: str) -> list[dict]:
             full_path = os.path.join(folder_path, name)
             duration = get_video_duration(full_path)
             if duration > 0:
-                files.append({"path": full_path, "name": name, "duration": duration})
+                tc_seconds = get_video_start_tc_seconds(full_path)
+                files.append({
+                    "path": full_path,
+                    "name": name,
+                    "duration": duration,
+                    "tc_seconds": tc_seconds,
+                })
     return files
 
 
