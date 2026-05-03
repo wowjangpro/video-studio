@@ -1280,6 +1280,85 @@ def _exclude_low_quality_windows(
 
 
 # ---------------------------------------------------------------------------
+# 정적/흔들림 장면 자동 cut
+# ---------------------------------------------------------------------------
+
+def _exclude_static_and_shaky(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """피사체 고정 정적 장면 + 의도 없는 흔들림 장면 자동 cut.
+
+    - 정적: avg_motion 매우 낮음 + 비말소리 → 의자/테이블만 보이는 무의미 장면
+    - 흔들림: motion variance 매우 높음 + 비말소리 + 짧은 활동 (셋업하다 카메라 흔든 구간)
+
+    보호 대상(첫/마지막/말소리/주요 활동 라벨)은 cut 안 함.
+    """
+    STATIC_MOTION = 0.005    # 거의 정지
+    SHAKY_MOTION = 0.15      # 매우 높은 모션 (의도된 손동작은 보통 0.03~0.08)
+
+    scene_map = {s["id"]: s for s in scenes}
+    decision_by_scene = {d["scene"]: d for d in decisions}
+
+    # 보호: 첫 씬, 마지막 씬, 라벨별 점수 최고 1개 (강제 trim과 동일 기준)
+    protected_ids: set[int] = set()
+    if scenes:
+        protected_ids.add(scenes[0]["id"])
+        protected_ids.add(scenes[-1]["id"])
+    label_top: dict[str, dict] = {}
+    for s in scenes:
+        action = s.get("action", "")
+        if action not in label_top or s.get("score", 0) > label_top[action].get("score", 0):
+            label_top[action] = s
+    for s in label_top.values():
+        protected_ids.add(s["id"])
+
+    static_cut = 0
+    shaky_cut = 0
+
+    for d in decisions:
+        if d.get("decision") == "cut":
+            continue
+        scene_id = d.get("scene", -1)
+        scene = scene_map.get(scene_id)
+        if not scene:
+            continue
+        if scene_id in protected_ids:
+            continue
+
+        avg_motion = scene.get("avg_motion", 0.0)
+        has_speech = scene.get("has_speech", False)
+
+        # 말소리는 흐름 보호 — 정적/흔들림 분기에서 제외
+        if has_speech:
+            continue
+
+        # 정적 장면: 매우 낮은 모션 + 비말소리
+        if avg_motion < STATIC_MOTION:
+            d["decision"] = "cut"
+            d.pop("keep_windows", None)
+            d["reason"] = f"(자동cut·정적·M={avg_motion:.4f}) {d.get('reason', '')}"
+            static_cut += 1
+            continue
+
+        # 흔들림 장면: 매우 높은 모션 + 비말소리 + 활동 라벨이 명확하지 않음
+        # cooking/eating은 손동작으로 모션 높을 수 있어 제외
+        # setting_up/walking에서 매우 높은 모션 = 카메라 이동(흔들림)
+        action = scene.get("action", "")
+        if avg_motion > SHAKY_MOTION and action not in ("cooking", "eating", "fire_tending"):
+            d["decision"] = "cut"
+            d.pop("keep_windows", None)
+            d["reason"] = f"(자동cut·흔들림·M={avg_motion:.4f}) {d.get('reason', '')}"
+            shaky_cut += 1
+
+    if static_cut or shaky_cut:
+        _log(f"정적/흔들림 cut: 정적 {static_cut}개, 흔들림 {shaky_cut}개")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
 # PARTIAL / KEEP / CUT 적용
 # ---------------------------------------------------------------------------
 
@@ -1618,6 +1697,7 @@ def run_narrative_editing(
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
+    decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -1681,6 +1761,7 @@ def run_narrative_editing(
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
+        decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1908,12 +1989,14 @@ __DURATION_GUIDE__
   - 4~6윈도우 씬 → `keep_windows: [0, 3]` 또는 `[2]` 만
   - 7+윈도우 씬 → `keep_windows: [0, 4]` 또는 핵심 1개
 
-### 4. CUT 대상 (적극)
+### 4. CUT 대상 (적극) — 의미 없는 화면 적극 제거
+- **카메라 셋팅 중 흔들림/이동** — 셋업하면서 카메라가 이리저리 흔들린 구간
+- **피사체 고정 정적 장면** — 테이블만, 의자만, 빈 풍경만 보이는 변화 없는 화면
+- **M:저이면서 화면 변화 없는 장면** — 시청자가 지루
 - 차량 운전(driving), 주차장/도로 단순 이동 (말소리 없음)
-- 흔들림/NG, 의미 없는 촬영
-- M:저이면서 변화 없는 정체 장면
+- 흔들림/NG, 의미 없는 촬영 (피사체 못 알아볼 정도)
 - 같은 활동/장소가 이미 다른 씬에서 다뤄진 반복
-- **활용도 낮은 영상은 통째로 cut OK** — 모든 영상을 살릴 필요 없음 (사용자 패턴: 30%는 통째 미사용)
+- desc(설명)에 "테이블", "의자", "빈 ~" 같은 표현만 있고 활동 없는 씬
 
 ### 5. 비슷한 씬이 여러 개 (시간순 분리됨)
 - 같은 라벨이 **시간 흐름상 떨어져** 반복되면 **모션 높은 것** 1~2개만 keep, 나머지 cut
@@ -2369,6 +2452,7 @@ def run_narrative_editing_claude(
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
+    decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2438,6 +2522,7 @@ def run_narrative_editing_claude(
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
+        decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
