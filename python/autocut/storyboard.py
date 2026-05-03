@@ -865,7 +865,7 @@ def _ensure_all_files_present(
     통째로 cut했다면 그건 보통 합리적 판단이므로 강제 복원하지 않는다.
     단, 영상에 점수 높은 씬(say >= 35)이 있으면 LLM 누락일 가능성이 있어 복원.
     """
-    SCORE_THRESHOLD = 35  # 이 점수 이상인 씬을 가진 영상만 복원
+    SCORE_THRESHOLD = 60  # 이 점수 이상인 씬을 가진 영상만 복원 (사용자 패턴: 30% 통째 미사용)
 
     decision_by_scene = {d["scene"]: d for d in decisions}
 
@@ -932,6 +932,160 @@ def _ensure_all_files_present(
         _log(f"파일 보존: {restored}개 영상에서 가치 있는 1씬 복원 (점수 {SCORE_THRESHOLD}+)")
     if skipped_low_value:
         _log(f"파일 통째 cut 허용: {skipped_low_value}개 영상 (점수 {SCORE_THRESHOLD} 미만)")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
+# 강제 trim — LLM이 목표 시간을 못 맞췄을 때 점수 낮은 씬부터 자동 cut/partial
+# ---------------------------------------------------------------------------
+
+def _force_trim_to_target(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+    target_minutes: int,
+    tolerance: float = 1.05,
+) -> list[dict]:
+    """목표 시간 초과 시 강제로 trim해서 target_minutes ± tolerance에 맞춤.
+
+    전략:
+      1. 현재 keep/partial 씬을 점수 오름차순으로 정렬
+      2. 점수 낮은 것부터:
+         - 비말소리 씬: cut
+         - 말소리(★) 씬: keep_windows를 더 줄임 (말소리 윈도우만 우선 keep)
+         - partial이면 keep_windows를 더 줄임
+      3. 보호: 첫 씬, 마지막 씬, 라벨별 unique 1개는 cut 금지
+
+    LLM이 충분히 못 줄였을 때 마지막 안전망. 흐름 보호는 유지하되 시간 우선.
+    """
+    target_sec = target_minutes * 60
+    max_sec = target_sec * tolerance
+
+    scene_map = {s["id"]: s for s in scenes}
+    decision_by_scene = {d["scene"]: d for d in decisions}
+
+    def calc_total() -> float:
+        total = 0.0
+        for d in decisions:
+            decision = d.get("decision", "keep")
+            if decision == "cut":
+                continue
+            scene = scene_map.get(d.get("scene", -1))
+            if not scene:
+                continue
+            if decision == "partial":
+                wids = d.get("keep_windows", [])
+                for wid in wids:
+                    if 0 <= wid < len(all_windows):
+                        w = all_windows[wid]
+                        total += w.get("end", 0) - w.get("start", 0)
+            else:  # keep
+                total += scene["end"] - scene["start"]
+        return total
+
+    # 보호 대상 씬 ID
+    protected_ids: set[int] = set()
+    if scenes:
+        protected_ids.add(scenes[0]["id"])
+        protected_ids.add(scenes[-1]["id"])
+    # 라벨별 점수 가장 높은 1개는 보호 (셋업/요리/불멍/풍경 등 핵심 활동)
+    label_top: dict[str, dict] = {}
+    for s in scenes:
+        action = s.get("action", "")
+        if action not in label_top or s.get("score", 0) > label_top[action].get("score", 0):
+            label_top[action] = s
+    for s in label_top.values():
+        protected_ids.add(s["id"])
+
+    initial = calc_total()
+    if initial <= max_sec:
+        return decisions
+
+    _log(f"강제 trim 시작: 현재 {initial/60:.1f}분 > 목표 {target_minutes}분 ({max_sec/60:.1f}분 한도)")
+
+    # 점수 오름차순 + 비말소리 우선
+    sortable = []
+    for d in decisions:
+        if d.get("decision") == "cut":
+            continue
+        scene = scene_map.get(d.get("scene", -1))
+        if not scene:
+            continue
+        score = scene.get("score", 0)
+        has_speech = scene.get("has_speech", False)
+        # 비말소리(0) 먼저 처리, 말소리는 score 낮은 것부터
+        sortable.append((0 if not has_speech else 1, score, d, scene))
+
+    sortable.sort(key=lambda x: (x[0], x[1]))
+
+    trimmed_count = 0
+    for _, _, d, scene in sortable:
+        if calc_total() <= max_sec:
+            break
+
+        scene_id = d["scene"]
+        has_speech = scene.get("has_speech", False)
+        decision = d.get("decision", "keep")
+
+        if scene_id in protected_ids:
+            # 보호 씬은 cut 금지. 단 partial로 줄이는 건 가능
+            if decision == "keep":
+                wids = scene.get("window_ids", [])
+                if len(wids) > 1:
+                    # 1윈도우만 (말소리면 말소리 윈도우 우선)
+                    if has_speech:
+                        speech_wids = [
+                            w for w in wids
+                            if 0 <= w < len(all_windows) and window_has_speech(all_windows[w])
+                        ]
+                        keep_w = [speech_wids[0]] if speech_wids else [wids[0]]
+                    else:
+                        keep_w = [max(wids, key=lambda w: all_windows[w].get("motion", 0.0)
+                                      if 0 <= w < len(all_windows) else 0.0)]
+                    d["decision"] = "partial"
+                    d["keep_windows"] = keep_w
+                    d["reason"] = f"(강제trim·보호씬축소) {d.get('reason', '')}"
+                    trimmed_count += 1
+            elif decision == "partial":
+                kw = d.get("keep_windows", [])
+                if len(kw) > 1:
+                    d["keep_windows"] = kw[:1]
+                    d["reason"] = f"(강제trim·partial축소) {d.get('reason', '')}"
+                    trimmed_count += 1
+            continue
+
+        if not has_speech:
+            # 비말소리: cut
+            d["decision"] = "cut"
+            d.pop("keep_windows", None)
+            d["reason"] = f"(강제trim·cut) {d.get('reason', '')}"
+            trimmed_count += 1
+        else:
+            # 말소리: keep_windows를 말소리 윈도우만 1~2개로
+            wids = (
+                d.get("keep_windows", [])
+                if decision == "partial"
+                else scene.get("window_ids", [])
+            )
+            speech_wids = [
+                w for w in wids
+                if 0 <= w < len(all_windows) and window_has_speech(all_windows[w])
+            ]
+            if speech_wids:
+                d["decision"] = "partial"
+                d["keep_windows"] = speech_wids[:2]
+                d["reason"] = f"(강제trim·말소리축소) {d.get('reason', '')}"
+                trimmed_count += 1
+            else:
+                # 말소리 윈도우 없으면 cut
+                d["decision"] = "cut"
+                d.pop("keep_windows", None)
+                d["reason"] = f"(강제trim·cut) {d.get('reason', '')}"
+                trimmed_count += 1
+
+    final = calc_total()
+    _log(f"강제 trim 완료: {trimmed_count}개 결정 변경, {initial/60:.1f}분 → {final/60:.1f}분")
 
     return decisions
 
@@ -1337,6 +1491,17 @@ def run_narrative_editing(
         if prev_total_min - cur_total_min < 1.0:
             _log(f"재편집 정체 감지 ({prev_total_min:.1f}→{cur_total_min:.1f}분), 중단")
             break
+
+    # 마지막 안전망: LLM 재편집 후에도 목표 초과면 강제 trim
+    if target_minutes > 0:
+        current_min = total_keep / 60
+        if current_min > target_minutes * 1.07:
+            decisions = _force_trim_to_target(
+                decisions, scenes, all_windows, target_minutes, tolerance=1.05
+            )
+            keep_segments = _apply_decisions(decisions, scenes, all_windows)
+            total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+            _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
 
     return keep_segments
 
@@ -1899,7 +2064,7 @@ def run_narrative_editing_claude(
 
         _log(f"Claude 재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
 
-        prev_nonspeech_min = nonspeech_min
+        prev_total_min = total_keep / 60
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
@@ -1914,12 +2079,26 @@ def run_narrative_editing_claude(
         keep_segments = _apply_decisions(decisions, scenes, all_windows)
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
         nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
-        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
+        cur_total_min = total_keep / 60
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {cur_total_min:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
         # 수렴 정체 감지: 1분 이상 줄지 않으면 중단 (LLM이 더 못 줄임)
-        if prev_nonspeech_min - nonspeech_min < 1.0:
-            _log(f"재편집 정체 감지 ({prev_nonspeech_min:.1f}→{nonspeech_min:.1f}분), 중단")
+        if prev_total_min - cur_total_min < 1.0:
+            _log(f"재편집 정체 감지 ({prev_total_min:.1f}→{cur_total_min:.1f}분), 중단")
             break
+
+    # -------------------------------------------------------------------
+    # 마지막 안전망: LLM 재편집 후에도 목표 초과면 강제 trim
+    # -------------------------------------------------------------------
+    if target_minutes > 0:
+        current_min = total_keep / 60
+        if current_min > target_minutes * 1.07:
+            decisions = _force_trim_to_target(
+                decisions, scenes, all_windows, target_minutes, tolerance=1.05
+            )
+            keep_segments = _apply_decisions(decisions, scenes, all_windows)
+            total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
+            _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
 
     return keep_segments
 
