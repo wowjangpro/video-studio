@@ -1055,34 +1055,12 @@ def _force_trim_to_target(
                     trimmed_count += 1
             continue
 
-        if not has_speech:
-            # 비말소리: cut
-            d["decision"] = "cut"
-            d.pop("keep_windows", None)
-            d["reason"] = f"(강제trim·cut) {d.get('reason', '')}"
-            trimmed_count += 1
-        else:
-            # 말소리: keep_windows를 말소리 윈도우만 1~2개로
-            wids = (
-                d.get("keep_windows", [])
-                if decision == "partial"
-                else scene.get("window_ids", [])
-            )
-            speech_wids = [
-                w for w in wids
-                if 0 <= w < len(all_windows) and window_has_speech(all_windows[w])
-            ]
-            if speech_wids:
-                d["decision"] = "partial"
-                d["keep_windows"] = speech_wids[:2]
-                d["reason"] = f"(강제trim·말소리축소) {d.get('reason', '')}"
-                trimmed_count += 1
-            else:
-                # 말소리 윈도우 없으면 cut
-                d["decision"] = "cut"
-                d.pop("keep_windows", None)
-                d["reason"] = f"(강제trim·cut) {d.get('reason', '')}"
-                trimmed_count += 1
+        # 흐름 > 말. 말소리도 의미 없으면 cut.
+        # 점수 낮은 순서로 처리되므로 점수 낮은 말소리도 cut 대상.
+        d["decision"] = "cut"
+        d.pop("keep_windows", None)
+        d["reason"] = f"(강제trim·cut) {d.get('reason', '')}"
+        trimmed_count += 1
 
     final = calc_total()
     _log(f"강제 trim 완료: {trimmed_count}개 결정 변경, {initial/60:.1f}분 → {final/60:.1f}분")
@@ -1634,7 +1612,7 @@ def run_narrative_editing(
     decisions = _cap_long_scenes(decisions, scenes, all_windows)
 
     # 말소리 보호 안전망 (PARTIAL에서 누락된 ★ 윈도우 복원)
-    decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+    # decisions = _protect_speech_in_partial(decisions, scenes, all_windows)  # 비활성화: 흐름 > 말
 
     # 모든 영상 파일에 최소 1씬 보장 (흐름 끊김 방지)
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
@@ -1699,7 +1677,7 @@ def run_narrative_editing(
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
-        decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+        # decisions = _protect_speech_in_partial(decisions, scenes, all_windows)  # 비활성화: 흐름 > 말
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
@@ -1879,6 +1857,13 @@ __DURATION_GUIDE__
 - **partial**: 핵심 윈도우만 골라 유지 (나머지 자동 삭제). **윈도우 2개 이상 씬의 기본값**.
 - **cut**: 씬 전체 삭제.
 
+## 🎯 가장 중요한 원칙 (절대 우선)
+
+**캠핑 브이로그의 본체는 "주인공이 시간순으로 무엇을 하는가"입니다.**
+- 도착 → 셋업 → 요리 → 식사 → 불멍 → 취침 → 아침 → 철수
+- 이 활동의 시간 흐름이 **가장 중요**하고, 말소리는 부수적입니다.
+- **흐름 > 말** — 말소리가 있어도 흐름에 기여 안 하면 cut 가능.
+
 ## 결정 규칙
 
 ### 1. 컷 길이 목표 (사용자 실제 편집 통계)
@@ -1886,11 +1871,23 @@ __DURATION_GUIDE__
 - partial keep_windows는 보통 1~2개만 (한 윈도우=10초)
 - **인접 윈도우 연속 keep 금지** — `[0, 1]`은 한 컷이 20초가 됨. `[0, 3]`처럼 점프
 
-### 2. 말소리(★) 씬도 partial 가능
-- 정보 가치 있는 발화(장비 설명/요리 해설/감상)는 **유지**
-- 그러나 **말 사이 여백, 무의미 발화, 변화 없는 화면**은 partial로 cut 가능
-- 30초+ 긴 말소리 씬도 핵심 발화 윈도우만 keep_windows로 지정
-- 즉, 길이가 길고 비말 윈도우가 섞여 있으면 **partial로 줄이세요**
+### 2. 말소리(★) 씬은 무조건 keep이 아님 ⚠️
+**말소리가 있다고 무조건 남기지 마세요.** 발화의 내용을 판단하세요:
+
+✅ **keep할 말소리** (의미 있는 정보 전달):
+- 장비 설명, 요리 과정 설명, 캠핑장 소개
+- 감상/리뷰 ("이거 진짜 맛있다", "텐트 자리 좋네")
+- 스토리텔링 (도착 멘트, 마무리 멘트)
+- 시청자에게 정보를 전달하는 내레이션
+
+❌ **cut/partial할 말소리** (의미 없음):
+- 의성어/감탄사만 ("어어", "음", "아", "오")
+- 혼잣말/중얼거림 (내용 불명, 시청자에게 의미 없음)
+- 같은 말 반복
+- 말 사이 긴 침묵/공백
+- 화면 변화 없이 길게 떠드는 장면
+
+→ 말소리 씬도 **흐름에 기여 안 하면 과감히 cut**. 말 < 흐름.
 
 ### 3. 비말소리 씬 (★ 없음)
 - 윈도우 1개 → keep
@@ -2126,6 +2123,11 @@ def _split_storyboard_to_files(storyboard: str, scenes: list[dict], num_parts: i
 FLOW_ANALYSIS_PROMPT = """당신은 캠핑/아웃도어 브이로그 편집자입니다.
 본격 편집 전에 **전체 영상의 흐름을 먼저 분석**합니다. 부분적 판단이 아닌 큰 그림을 봅니다.
 
+**핵심 관점**: 캠핑 브이로그의 본체는 "주인공이 시간순으로 무엇을 하는가"입니다.
+- 도착 → 셋업 → 요리 → 식사 → 불멍 → 취침 → 아침 → 철수
+- 이 **활동의 시간 흐름이 가장 중요**하고, 말소리는 부수적입니다.
+- 의성어/혼잣말/의미 없는 발화는 흐름에 기여 안 하면 cut 대상.
+
 ## 영상 클립 목록 (촬영 순서)
 
 __FILES_LIST__
@@ -2346,7 +2348,7 @@ def run_narrative_editing_claude(
 
     decisions = _fill_missing_scenes(decisions, scenes)
     decisions = _cap_long_scenes(decisions, scenes, all_windows)
-    decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+    # decisions = _protect_speech_in_partial(decisions, scenes, all_windows)  # 비활성화: 흐름 > 말
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
@@ -2415,7 +2417,7 @@ def run_narrative_editing_claude(
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
-        decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
+        # decisions = _protect_speech_in_partial(decisions, scenes, all_windows)  # 비활성화: 흐름 > 말
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
