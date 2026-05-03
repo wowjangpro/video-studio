@@ -996,6 +996,12 @@ def _force_trim_to_target(
         action = s.get("action", "")
         if action not in label_top or s.get("score", 0) > label_top[action].get("score", 0):
             label_top[action] = s
+    # 시청자 대상 발화 그룹이 있는 씬은 보호 (의미 있는 멘트)
+    speech_flows = _identify_speech_flows(scenes, all_windows)
+    speech_flow_scene_ids: set[int] = set()
+    for flow in speech_flows:
+        speech_flow_scene_ids.update(flow["scene_ids"])
+    protected_ids.update(speech_flow_scene_ids)
     for s in label_top.values():
         protected_ids.add(s["id"])
 
@@ -1029,11 +1035,27 @@ def _force_trim_to_target(
         decision = d.get("decision", "keep")
 
         if scene_id in protected_ids:
-            # 보호 씬은 cut 금지. 단 partial로 줄이는 건 가능
+            # 시청자 대상 발화 그룹이 있는 씬: 발화 윈도우 모두 보존 (축소 안 함)
+            if scene_id in speech_flow_scene_ids:
+                # 이 씬에 속한 발화 그룹 윈도우 모두 수집
+                scene_wids_set = set(scene.get("window_ids", []))
+                flow_wids_in_scene: set[int] = set()
+                for flow in speech_flows:
+                    if scene_id in flow["scene_ids"]:
+                        flow_wids_in_scene.update(set(flow["window_ids"]) & scene_wids_set)
+                if flow_wids_in_scene:
+                    new_kw = sorted(flow_wids_in_scene)
+                    if d.get("decision") != "partial" or set(d.get("keep_windows", [])) != flow_wids_in_scene:
+                        d["decision"] = "partial"
+                        d["keep_windows"] = new_kw
+                        d["reason"] = f"(강제trim·발화그룹보호) {d.get('reason', '')}"
+                        trimmed_count += 1
+                continue
+
+            # 일반 보호 씬: cut 금지, 1윈도우 축소
             if decision == "keep":
                 wids = scene.get("window_ids", [])
                 if len(wids) > 1:
-                    # 1윈도우만 (말소리면 말소리 윈도우 우선)
                     if has_speech:
                         speech_wids = [
                             w for w in wids
@@ -1920,6 +1942,8 @@ def run_narrative_editing(
             decisions = _force_trim_to_target(
                 decisions, scenes, all_windows, target_minutes, tolerance=1.05
             )
+            # 강제 trim 후 발화 그룹 한 번 더 보호 (잘린 멘트 복원)
+            decisions = _protect_speech_flow(decisions, scenes, all_windows)
             keep_segments = _apply_decisions(decisions, scenes, all_windows)
             total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
             _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
@@ -2053,23 +2077,39 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 - **촬영한 영상은 가능하면 모두 짧게라도 사용** (통째 cut 최소화)
 - 한 영상에서 여러 짧은 컷을 골라도 OK (사용자 패턴: 한 영상에서 1~9개 컷)
 
-### 3. 주제 설명/내레이션 말은 흐름 보호 ⭐
-**시청자에게 하는 설명/내레이션은 의미 단위가 끊기지 않게 보호.** 끝부분만 남기면 안 됨.
+### 3. 주제 설명/내레이션 말은 흐름 보호 ⭐⭐⭐
+**발화 내용(💬)을 읽고 "누구한테 하는 말인지"를 먼저 판단하세요.**
 
-✅ **그룹 전체 keep할 발화** (의미 단위 통째 보존):
-- 장비 설명, 요리 해설, 캠핑장 소개, 감상/리뷰 ("이거 맛있다", "텐트 자리 좋네")
-- 도착·마무리 멘트, 시청자 대상 상황 설명
-- **연속 ★ 윈도우(15초+)에 걸친 한 주제 발화** = 시청자 대상 거의 확실 → 처음~끝 윈도우 모두 keep_windows에 포함
-- 끝부분만 남기지 마세요. 시작·중간·끝이 모두 의미 단위면 전부 keep.
+🎯 **발화 대상 구분법** (transcript 내용으로 판단):
 
-❌ **cut 가능한 말** (의미 없는 발화):
-- 의성어/감탄사 ("어어", "음", "아", "오")
-- 혼잣말/중얼거림, 같은 말 반복
-- 5초 이내 단발 발화 + 화면 활동 없음
-- 말 사이 긴 침묵 (말 끊긴 공백 윈도우)
+**A. 시청자 대상 발화** = 반드시 의미 단위 통째 keep, **끝부분만 남기지 마세요**
+- 카메라/시청자에게 직접 말함: "오늘은 ~ 캠핑장에 왔습니다", "이 텐트는 ~~", "맛있게 먹어볼게요"
+- 설명/소개 톤: 장비/캠핑장/요리 과정/장소 설명
+- 감상 공유: "이거 진짜 좋네요", "분위기 끝내준다"
+- 도착·마무리·정리 멘트: "도착했습니다", "오늘은 여기까지"
+- 인사: "안녕하세요", "오늘 영상 시작합니다"
+- → **연속 ★ 윈도우 전체(처음~끝)를 keep_windows에 포함**
 
-**판단 기준**: storyboard의 💬 발화 내용을 읽고 "시청자에게 의미 있는가?" 자문.
-의미 있는 멘트가 여러 윈도우에 걸쳐 있으면 **모든 해당 윈도우를 keep_windows에 포함**하세요.
+**B. 동행자와의 대화** = 흐름 살리기 위해 의미 단위 keep
+- "이거 봐봐", "여기 자리 좋지?" 같은 양방향 대화
+- 일행과 상호작용 (요리 중 협업, 셋업 중 의논)
+- 활동과 직접 연결된 대화면 → 활동 영상과 함께 partial keep
+
+**C. 혼잣말/감탄사** = cut 가능
+- 단순 감탄: "와", "어", "음...", "아 진짜"
+- 짧은 중얼거림 (5초 이내, 내용 모호)
+- 같은 말 반복
+- 화면 활동 없이 떠드는 무의미 멘트
+
+**D. 침묵/공백** = cut
+- 말 사이 긴 침묵 (10초+ 빈 윈도우)
+- transcript 비어있는 ★ 윈도우
+
+**판단 절차**:
+1. storyboard의 💬 발화를 읽기
+2. 누구한테 하는 말인지 분류 (A/B/C/D)
+3. A 또는 B(활동 연계)면 **연속 윈도우 전체를 keep_windows**에 포함 (끝만 남기지 X)
+4. C 또는 D면 cut 또는 partial로 윈도우 1개만
 
 ## 사전 분석 — 전체 영상의 흐름 (이 분석을 따라 편집 결정)
 
