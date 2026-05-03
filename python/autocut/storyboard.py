@@ -1168,18 +1168,40 @@ def _distribute_activity_clusters(
             continue
 
         label = cluster[0].get("action", "")
-        # cut됐던 씬을 1윈도우 partial로 복원 (모션 높은 윈도우)
-        # keep_or_partial은 partial로 축소 (이미 partial이면 그대로 두되 너무 길면 1윈도우)
-        for s in cluster:
+        n_cluster = len(cluster)
+
+        # 시간순 위치별 윈도우 선택 전략:
+        #   - 첫 씬: 활동 시작 부분 (윈도우 앞쪽) — 활동 도입
+        #   - 마지막 씬: 활동 끝 부분 (윈도우 뒷쪽) — 활동 완성/마무리
+        #   - 중간 씬들: 모션 높은 윈도우 (대표 컷)
+        for idx, s in enumerate(cluster):
             d = decision_by_scene.get(s["id"])
             wids = s.get("window_ids", [])
             if not wids:
                 continue
 
-            best_wid = max(
-                wids,
-                key=lambda w: all_windows[w].get("motion", 0.0) if 0 <= w < len(all_windows) else 0.0,
-            )
+            # 저품질(usable=no) 윈도우 제외
+            usable_wids = [
+                w for w in wids
+                if 0 <= w < len(all_windows)
+                and all_windows[w].get("usable", "yes") != "no"
+            ]
+            pool = usable_wids if usable_wids else wids
+
+            # 위치별 윈도우 선택
+            if idx == 0:
+                # 첫 씬: 시작 부분
+                target_wid = pool[0]
+            elif idx == n_cluster - 1:
+                # 마지막 씬: 끝 부분 (활동 완성)
+                target_wid = pool[-1]
+            else:
+                # 중간 씬: 모션 높은 윈도우
+                target_wid = max(
+                    pool,
+                    key=lambda w: all_windows[w].get("motion", 0.0)
+                    if 0 <= w < len(all_windows) else 0.0,
+                )
 
             if d is None:
                 d = {"scene": s["id"]}
@@ -1187,25 +1209,94 @@ def _distribute_activity_clusters(
                 decision_by_scene[s["id"]] = d
 
             if d.get("decision") == "cut":
-                # cut → 1윈도우 partial 복원
                 d["decision"] = "partial"
-                d["keep_windows"] = [best_wid]
-                d["reason"] = f"(클러스터분배·{label}) 흐름 유지 위해 1윈도우 복원"
+                d["keep_windows"] = [target_wid]
+                pos_label = "시작" if idx == 0 else ("완성" if idx == n_cluster - 1 else "대표")
+                d["reason"] = f"(클러스터분배·{label}·{pos_label}) 흐름 유지 위해 복원"
             elif d.get("decision") == "keep" and len(wids) > 1:
-                # keep → 1윈도우 partial로 축소
                 d["decision"] = "partial"
-                d["keep_windows"] = [best_wid]
-                d["reason"] = f"(클러스터분배·{label}) 균등 분배 위해 1윈도우 축소"
+                d["keep_windows"] = [target_wid]
+                pos_label = "시작" if idx == 0 else ("완성" if idx == n_cluster - 1 else "대표")
+                d["reason"] = f"(클러스터분배·{label}·{pos_label}) 균등 분배 축소"
             elif d.get("decision") == "partial":
                 kw = d.get("keep_windows", [])
-                if len(kw) > 1:
+                # 첫/마지막 씬은 위치 윈도우로 교체, 중간은 기존 keep 유지하되 1개로 축소
+                if idx == 0 or idx == n_cluster - 1:
+                    d["keep_windows"] = [target_wid]
+                    pos_label = "시작" if idx == 0 else "완성"
+                    d["reason"] = f"(클러스터분배·{label}·{pos_label}) 위치 윈도우로 교체"
+                elif len(kw) > 1:
                     d["keep_windows"] = kw[:1]
-                    d["reason"] = f"(클러스터분배·{label}) 균등 분배 위해 1윈도우 축소"
+                    d["reason"] = f"(클러스터분배·{label}·대표) 1윈도우로 축소"
 
         distributed_groups += 1
 
     if distributed_groups:
-        _log(f"활동 클러스터 분배: {distributed_groups}개 그룹을 균등 1윈도우 partial로 보정")
+        _log(f"활동 클러스터 분배: {distributed_groups}개 그룹 시간순 분포 적용 (시작/대표/완성)")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
+# 저품질 윈도우 제외 (usable=no)
+# ---------------------------------------------------------------------------
+
+def _exclude_low_quality_windows(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """KEEP/PARTIAL 윈도우 중 usable=no(품질 불량)는 자동 제외.
+
+    Stage 2 비전 분석에서 '심한 흔들림/초점 나감/바닥-하늘 촬영/렌즈 가림' 등으로
+    분류된 윈도우는 의미 없는 컷이므로 결과에서 빼야 한다.
+
+    - keep 씬에 usable=no 윈도우가 섞여 있으면 partial로 변경 (좋은 윈도우만)
+    - partial keep_windows에서 usable=no 항목 제거
+    - 모든 윈도우가 usable=no면 cut으로 전환
+    """
+    scene_map = {s["id"]: s for s in scenes}
+    excluded = 0
+    converted_to_cut = 0
+
+    def is_bad(wid: int) -> bool:
+        return (
+            0 <= wid < len(all_windows)
+            and all_windows[wid].get("usable", "yes") == "no"
+        )
+
+    for d in decisions:
+        decision = d.get("decision", "keep")
+        if decision == "cut":
+            continue
+        scene = scene_map.get(d.get("scene", -1))
+        if not scene:
+            continue
+
+        wids = scene["window_ids"] if decision == "keep" else d.get("keep_windows", [])
+        if not wids:
+            continue
+
+        good = [w for w in wids if not is_bad(w)]
+        bad = [w for w in wids if is_bad(w)]
+
+        if not bad:
+            continue
+
+        if not good:
+            # 모든 윈도우 불량 → cut
+            d["decision"] = "cut"
+            d.pop("keep_windows", None)
+            d["reason"] = f"(저품질제외·전체불량) {d.get('reason', '')}"
+            converted_to_cut += 1
+        else:
+            d["decision"] = "partial"
+            d["keep_windows"] = good
+            d["reason"] = f"(저품질제외·{len(bad)}개) {d.get('reason', '')}"
+            excluded += len(bad)
+
+    if excluded or converted_to_cut:
+        _log(f"저품질 윈도우 제외: {excluded}개 윈도우 제외, {converted_to_cut}개 씬 cut 전환")
 
     return decisions
 
@@ -1548,6 +1639,7 @@ def run_narrative_editing(
     # 모든 영상 파일에 최소 1씬 보장 (흐름 끊김 방지)
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
+    decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -1610,6 +1702,7 @@ def run_narrative_editing(
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
+        decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -2256,6 +2349,7 @@ def run_narrative_editing_claude(
     decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
+    decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2324,6 +2418,7 @@ def run_narrative_editing_claude(
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
+        decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
