@@ -859,17 +859,16 @@ def _ensure_all_files_present(
     scenes: list[dict],
     all_windows: list[dict],
 ) -> list[dict]:
-    """각 file_index에서 최소 1개 씬이 keep/partial 상태로 살아있도록 보장.
+    """가치 있는 영상에 한해 최소 1개 씬을 보존 (활용도 낮으면 LLM 결정 존중).
 
-    LLM이 한 영상을 통째로 cut하면 시간 흐름에 공백이 생기므로, 해당 영상의
-    가장 점수 높은 씬을 partial(1윈도우)로 복원한다. 흐름이 끊어지지 않게.
+    사용자 실제 편집 패턴에서는 영상의 30%가 통째로 미사용된다. LLM이 영상을
+    통째로 cut했다면 그건 보통 합리적 판단이므로 강제 복원하지 않는다.
+    단, 영상에 점수 높은 씬(say >= 35)이 있으면 LLM 누락일 가능성이 있어 복원.
     """
-    scene_map = {s["id"]: s for s in scenes}
+    SCORE_THRESHOLD = 35  # 이 점수 이상인 씬을 가진 영상만 복원
 
-    # 결정별 정보
     decision_by_scene = {d["scene"]: d for d in decisions}
 
-    # file_index별 keep/partial 씬 개수
     file_keep_count: dict[int, int] = {}
     file_scenes: dict[int, list[dict]] = {}
 
@@ -884,19 +883,25 @@ def _ensure_all_files_present(
         if decision != "cut":
             file_keep_count[fi] = file_keep_count.get(fi, 0) + 1
 
-    # 살아있는 씬이 0개인 파일 찾기
     restored = 0
+    skipped_low_value = 0
     for fi, fscenes in file_scenes.items():
         if file_keep_count.get(fi, 0) > 0:
             continue
 
-        # 후보 선택: 점수 높은 씬 (없으면 모션 높은 씬, 그것도 없으면 첫 씬)
+        max_score = max((s.get("score", 0) for s in fscenes), default=0)
+
+        # 점수 낮은 영상은 LLM 판단 존중 (통째 cut OK)
+        if max_score < SCORE_THRESHOLD:
+            skipped_low_value += 1
+            continue
+
+        # 후보 선택: 점수 높은 씬
         candidate = max(
             fscenes,
             key=lambda s: (s.get("score", 0), s.get("avg_motion", 0.0)),
         )
 
-        # 1윈도우 partial로 복원 (모션 높은 윈도우 우선)
         wids = candidate.get("window_ids", [])
         if not wids:
             continue
@@ -911,10 +916,9 @@ def _ensure_all_files_present(
             "scene": candidate["id"],
             "decision": "partial",
             "keep_windows": [best_wid],
-            "reason": "(자동복원) 영상이 통째로 cut되지 않게 짧게라도 보존",
+            "reason": f"(자동복원) 점수 {max_score:.0f}로 가치 있는 영상에 1씬 보존",
         }
 
-        # 기존 결정 교체 또는 추가
         existing = decision_by_scene.get(candidate["id"])
         if existing:
             existing["decision"] = "partial"
@@ -925,7 +929,9 @@ def _ensure_all_files_present(
         restored += 1
 
     if restored:
-        _log(f"파일 보존: {restored}개 영상에서 통째 cut 방지를 위해 1씬 복원")
+        _log(f"파일 보존: {restored}개 영상에서 가치 있는 1씬 복원 (점수 {SCORE_THRESHOLD}+)")
+    if skipped_low_value:
+        _log(f"파일 통째 cut 허용: {skipped_low_value}개 영상 (점수 {SCORE_THRESHOLD} 미만)")
 
     return decisions
 
@@ -1278,7 +1284,7 @@ def run_narrative_editing(
     TOLERANCE = 1.07  # 7% 여유 (30분 목표 → 32분까지 허용)
 
     for reedit_round in range(MAX_REEDIT):
-        current_min = nonspeech_min
+        current_min = total_keep / 60  # 전체 keep 시간 비교
         if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
             break
 
@@ -1309,7 +1315,7 @@ def run_narrative_editing(
 
         _log(f"재편집 {reedit_round + 1}차: {len(new_cuts)}개 추가 CUT/PARTIAL")
 
-        prev_nonspeech_min = nonspeech_min
+        prev_total_min = total_keep / 60
         decisions = _merge_reedit_decisions(decisions, new_cuts)
         decisions = _fill_missing_scenes(decisions, scenes)
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
@@ -1324,11 +1330,12 @@ def run_narrative_editing(
         keep_segments = _apply_decisions(decisions, scenes, all_windows)
         total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
         nonspeech_min = _calc_nonspeech_keep_min(decisions, scenes, all_windows)
-        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
+        cur_total_min = total_keep / 60
+        _log(f"재편집 후: {len(keep_segments)}개 세그먼트, 전체 {cur_total_min:.1f}분 (비말소리 {nonspeech_min:.1f}분)")
 
         # 수렴 정체 감지: 1분 이상 줄지 않으면 중단
-        if prev_nonspeech_min - nonspeech_min < 1.0:
-            _log(f"재편집 정체 감지 ({prev_nonspeech_min:.1f}→{nonspeech_min:.1f}분), 중단")
+        if prev_total_min - cur_total_min < 1.0:
+            _log(f"재편집 정체 감지 ({prev_total_min:.1f}→{cur_total_min:.1f}분), 중단")
             break
 
     return keep_segments
@@ -1474,37 +1481,41 @@ __DURATION_GUIDE__
 
 ## 결정 규칙
 
-### 1. 말소리(★) 씬
-- 말소리 비율 ★ 표시가 있는 씬은 **keep** (길이 무관) — 정보 전달이 우선
-- 단 "어어", "음..." 같은 무의미 발화 + 화면 변화 없으면 cut 가능
+### 1. 컷 길이 목표 (사용자 실제 편집 통계)
+- **평균 컷 9초 ± 3초**, 절반은 5초 이하
+- partial keep_windows는 보통 1~2개만 (한 윈도우=10초)
+- **인접 윈도우 연속 keep 금지** — `[0, 1]`은 한 컷이 20초가 됨. `[0, 3]`처럼 점프
 
-### 2. 비말소리 씬 (★ 없음)
+### 2. 말소리(★) 씬도 partial 가능
+- 정보 가치 있는 발화(장비 설명/요리 해설/감상)는 **유지**
+- 그러나 **말 사이 여백, 무의미 발화, 변화 없는 화면**은 partial로 cut 가능
+- 30초+ 긴 말소리 씬도 핵심 발화 윈도우만 keep_windows로 지정
+- 즉, 길이가 길고 비말 윈도우가 섞여 있으면 **partial로 줄이세요**
+
+### 3. 비말소리 씬 (★ 없음)
 - 윈도우 1개 → keep
-- 윈도우 2개 이상 → **거의 모두 partial** — keep_windows를 골라 한 컷 10초 이내로
-- 기본 패턴 (한 컷 10초 = 1윈도우):
-  - 2~3윈도우 씬 → `keep_windows: [0]` 또는 `[0, 마지막]`
-  - 4~6윈도우 씬 → `keep_windows: [0, 중간 1개]` (윈도우 사이 점프 = 화면 전환)
-  - 7~10윈도우 씬 → `keep_windows: [0, 중간 1~2개]`
-  - 10윈도우+ → 윈도우 2~3개만 (시작/하이라이트/끝)
-- **인접 윈도우 연속 keep 금지** — `[0, 1]`처럼 붙여놓으면 컷이 20초가 됨. `[0, 3]`처럼 점프
+- 윈도우 2개 이상 → **거의 모두 partial** — keep_windows 1~2개만
+- 기본 패턴 (한 컷 = 1윈도우, 평균 9초 목표):
+  - 2~3윈도우 씬 → `keep_windows: [0]` (10초 컷)
+  - 4~6윈도우 씬 → `keep_windows: [0, 3]` 또는 `[2]` 만
+  - 7+윈도우 씬 → `keep_windows: [0, 4]` 또는 핵심 1개
 
-### 3. CUT 대상
-- 차량 운전(driving), 주차장/도로 단순 이동 (말소리 없는 경우)
+### 4. CUT 대상 (적극)
+- 차량 운전(driving), 주차장/도로 단순 이동 (말소리 없음)
 - 흔들림/NG, 의미 없는 촬영
 - M:저이면서 변화 없는 정체 장면
-- 같은 활동/장소가 이미 다른 씬에서 다뤄진 명백한 반복
+- 같은 활동/장소가 이미 다른 씬에서 다뤄진 반복
+- **활용도 낮은 영상은 통째로 cut OK** — 모든 영상을 살릴 필요 없음 (사용자 패턴: 30%는 통째 미사용)
 
-### 4. 비슷한 씬이 여러 개
+### 5. 비슷한 씬이 여러 개
 - 같은 라벨이 반복되면 **모션 높은 것** 1~2개만 keep/partial, 나머지 cut
 - 같은 활동이라도 시간대/장소 다르면 반복 아님 (아침 요리 vs 저녁 요리)
+- **한 영상에서 여러 짧은 컷 OK** (사용자도 한 영상에서 1~9개 컷 사용)
 
-### 5. 캠핑 콘텐츠 본체 보호
-캠핑 영상의 핵심 콘텐츠는 **셋업(텐트/타프/장비) / 요리·식사 / 불멍·모닥불 / 풍경·자연**입니다.
-이 활동들은 시청자가 보러 오는 본체이므로 함부로 cut하지 마세요. 길면 partial로 줄이되, 활동 자체는 살립니다.
-
-### 6. 흐름 보장
-- 인트로(도착) → 셋업 → 활동 → 여유 → 마무리(철수)의 흐름이 최소 1개씩 살아야 함
-- 각 클립(--- 클립 #N --- 사이)에서 최소 1개 씬은 살림
+### 6. 흐름 보장 (느슨한 보호)
+- 인트로(도착) → 셋업 → 활동 → 여유 → 마무리(철수) 큰 흐름은 살아있어야 함
+- 단, 각 클립별 1씬 강제 keep은 아님 — 활용도가 정말 낮으면 클립 통째 cut OK
+- 셋업/요리/불멍/풍경은 핵심 콘텐츠 — 짧게라도 1~2개 살리세요
 
 ## 출력 형식
 
@@ -1595,25 +1606,27 @@ REEDIT_PROMPT_OLLAMA = """이전 편집 결과가 목표 시간을 초과했습�
 ]
 """
 
-REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 비말소리 합이 목표를 크게 초과했습니다.
-이번 라운드에서 **반드시 충분히 많이 줄여야** 합니다. 미흡하면 결과가 사용 불가합니다.
+REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 전체 길이가 목표를 크게 초과했습니다.
+이번 라운드에서 **반드시 충분히 많이 줄여야** 합니다.
 
-현재 비말소리 합: **{current_min}분** (목표: **{target_minutes}분**, 초과: **{over_min}분**)
+현재 전체 길이: **{current_min}분** (목표: **{target_minutes}분**, 초과: **{over_min}분**)
 원본: {total_min}분
 
 ## 절대 규칙
 
-1. **이번 응답으로 비말소리 합이 {target_minutes}분 ± 2분이 되도록** 매우 적극적으로 추가 cut/partial을 적용하세요
-2. **말소리(★) 장면은 그대로 유지** (길이 제한 없음)
-3. **모든 영상 파일에서 1개 이상의 씬은 반드시 남기세요** (통째로 cut 금지)
+1. **이번 응답으로 전체 길이가 {target_minutes}분 ± 2분이 되도록** 매우 적극적으로 추가 cut/partial을 적용하세요
+2. **말소리(★) 장면도 길면 partial** — 말 사이 여백, 무의미 발화, 변화 없는 화면 cut
+3. **활용도 낮은 영상은 통째로 cut OK** — 모든 영상을 보존할 필요 없음
 
 ## 적극적 감축 전략 — 모두 적용
 
 - **반복 활동**: 같은 라벨/내용이 2개 이상이면 모션 가장 좋은 1개만 남기고 나머지 모두 cut
-- **긴 partial을 더 짧게**: 현재 partial keep_windows가 3개+면 1~2개로 줄임
-- **인접 비슷한 씬**: 시간 흐름상 가까이 있는 같은 활동은 1개만 keep, 다른 건 cut
+- **긴 partial을 더 짧게**: 현재 partial keep_windows가 2개+면 1개로 줄임
+- **말소리 씬 partial**: 30초+ 말소리 씬도 핵심 발화 윈도우 1~2개만 keep
+- **인접 비슷한 씬**: 시간 흐름상 가까이 있는 같은 활동은 1개만 keep
 - **B-roll/풍경**: 핵심 1~2개만 남기고 cut
 - **저모션/정체 장면**: 모두 cut
+- 평균 컷 길이 9초 ± 3초 목표 (사용자 실제 편집 통계)
 
 ## 현재 KEEP 장면 목록 (이 중에서 골라서 줄이세요)
 
@@ -1621,7 +1634,7 @@ REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 비말소리 합이 목표를 
 
 ## 보호 대상 (cut 금지)
 
-- ★ 말소리 장면 모두
+- ★ 말소리 중 핵심 발화 (단, 길면 partial로 사이 여백은 자르세요)
 - 내러티브 전환점 (도착, 셋업 시작, 식사 시작, 마무리) 각 1개
 - 유일한 활동 (셋업/요리/불멍/풍경 각 1~2개)
 
@@ -1749,22 +1762,21 @@ def run_narrative_editing_claude(
         if target_minutes > 0:
             default_guide = (
                 f"## 목표 시간 — 절대 규칙\n\n"
-                f"**비말소리(B-roll) 장면의 합이 약 {target_minutes}분이 되도록** 편집하세요.\n"
-                f"- 말소리(★) 장면은 길이 제한 없이 모두 보존 (정보 전달이 우선)\n"
-                f"- 말소리 장면을 제외한 풍경/셋업/요리/불멍/이동 등 비말소리 장면의 합이 {target_minutes}분 ± 2분\n\n"
-                f"**모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 살려두세요** — "
-                f"한 영상이 통째로 빠지면 시간 흐름에 공백이 생깁니다. "
-                f"덜어내야 한다면 partial로 1~2윈도우만 남기세요.\n\n"
-                f"비말소리 합을 줄이는 방법:\n"
-                f"- 비말소리 씬은 기본적으로 PARTIAL (윈도우 1~2개만)\n"
+                f"**완성본 전체 길이가 약 {target_minutes}분이 되도록** 편집하세요. "
+                f"(말소리/비말소리 모두 포함한 합. ± 2분 이내)\n\n"
+                f"이 목표를 맞추는 방법:\n"
+                f"- 모든 씬을 PARTIAL 검토 (keep_windows 1~2개로 짧게)\n"
+                f"- **말소리(★) 씬도 길면 partial** — 말 사이 여백, 무의미 발화, 변화 없는 화면 cut\n"
                 f"- 같은 라벨 반복 씬은 **모션 가장 높은 1개만** 남기고 나머지 CUT\n"
-                f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지, 가장 좋은 1개)\n"
+                f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지)\n"
+                f"- **활용도 낮은 영상은 통째로 cut OK** (사용자 패턴: 영상 30%는 통째 미사용)\n"
+                f"- 평균 컷 길이 **9초 ± 3초** 목표 (사용자 실제 편집 통계)\n"
             )
-            _log(f"목표 시간 설정: 비말소리 합 {target_minutes}분")
+            _log(f"목표 시간 설정: 전체 합 {target_minutes}분")
         else:
             default_guide = (
-                f"**완성본은 원본의 50~70% 분량(약 {keep_min_low}~{keep_min_high}분)을 목표로 하세요.**\n"
-                f"모든 영상 파일에서 짧게라도 1개 이상의 씬은 반드시 살려두세요."
+                f"**완성본 전체 길이는 원본의 50~70%(약 {keep_min_low}~{keep_min_high}분)를 목표로 하세요.**\n"
+                f"평균 컷 길이는 9초 ± 3초로 짧게 자주 끊어 주세요."
             )
         comment_section = ""
         if editing_comment:
@@ -1847,7 +1859,7 @@ def run_narrative_editing_claude(
     TOLERANCE = 1.07  # 7% 여유 (30분 목표 → 32분까지 허용)
 
     for reedit_round in range(MAX_REEDIT):
-        current_min = nonspeech_min  # 비말소리만 비교
+        current_min = total_keep / 60  # 전체 keep 시간 비교
         if target_minutes <= 0 or current_min <= target_minutes * TOLERANCE:
             break
 
