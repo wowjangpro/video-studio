@@ -865,7 +865,7 @@ def _ensure_all_files_present(
     통째로 cut했다면 그건 보통 합리적 판단이므로 강제 복원하지 않는다.
     단, 영상에 점수 높은 씬(say >= 35)이 있으면 LLM 누락일 가능성이 있어 복원.
     """
-    SCORE_THRESHOLD = 60  # 이 점수 이상인 씬을 가진 영상만 복원 (사용자 패턴: 30% 통째 미사용)
+    SCORE_THRESHOLD = 0  # 모든 영상 보존 (사용자 요청: 흐름 유지 위해 짧게라도 1씬 필수)
 
     decision_by_scene = {d["scene"]: d for d in decisions}
 
@@ -1302,11 +1302,24 @@ def _make_segment(
     reason: str,
     scene: dict,
 ) -> dict:
-    """개별 KEEP 세그먼트 데이터 생성"""
+    """개별 KEEP 세그먼트 데이터 생성
+
+    자동복원/클러스터분배 segment는 윈도우 앞 5초만 사용해
+    흐름은 잇고 분량 부담은 줄인다.
+    """
+    g_start = w["globalStart"]
+    g_end = w["globalEnd"]
+
+    # 자동복원/클러스터분배는 짧게 (5초)
+    if reason and ("자동복원" in reason or "클러스터분배" in reason):
+        SHORT_DUR = 5.0
+        if g_end - g_start > SHORT_DUR:
+            g_end = g_start + SHORT_DUR
+
     return {
         "id": seg_id,
-        "globalStart": w["globalStart"],
-        "globalEnd": w["globalEnd"],
+        "globalStart": g_start,
+        "globalEnd": g_end,
         "label": w["label"],
         "score": w.get("s1_score", 0),
         "source": w.get("source", ""),
