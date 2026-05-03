@@ -1091,6 +1091,126 @@ def _force_trim_to_target(
 
 
 # ---------------------------------------------------------------------------
+# 활동 클러스터 균등 분배
+# 같은 라벨(셋업/요리/불멍 등)이 시간순 인접한 씬 그룹에서
+# 한쪽만 길게 keep / 나머지 통째 cut된 패턴을 발견하면 균등 분배로 보정
+# ---------------------------------------------------------------------------
+
+# 분배 대상 라벨 (활동이 여러 영상에 걸쳐 진행될 수 있는 것)
+_DISTRIBUTABLE_LABELS = {
+    "setting_up",      # 텐트/타프 설치
+    "cooking",         # 요리
+    "fire_tending",    # 불멍/모닥불
+    "showing_gear",    # 장비 소개
+    "walking",         # 이동/하이킹
+    "scenery",         # 풍경
+    "eating",          # 식사
+}
+
+
+def _distribute_activity_clusters(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """같은 라벨이 시간순 인접한 씬 그룹에서 흐름 유지 위해 균등 partial 적용.
+
+    예: setting_up 씬 5개 (S5~S9 인접) →
+        LLM이 S6만 길게 keep, 나머지 cut 했다면 → 흐름 끊김.
+        이런 패턴 발견 시 모든 씬을 각 1윈도우 partial로 균등 분배.
+
+    조건:
+      - 시간순 인접한 같은 라벨 씬이 3개 이상
+      - LLM 결정에 keep/partial과 cut이 섞여 있음 (한쪽만 처리한 패턴)
+    """
+    if not scenes:
+        return decisions
+
+    # 시간순 정렬 (이미 정렬되어 있겠지만 보장)
+    sorted_scenes = sorted(scenes, key=lambda s: s.get("start", 0))
+
+    # 인접 같은 라벨 클러스터 추출
+    clusters: list[list[dict]] = []
+    current: list[dict] = []
+    current_label: str | None = None
+
+    for s in sorted_scenes:
+        action = s.get("action", "")
+        if action in _DISTRIBUTABLE_LABELS and action == current_label:
+            current.append(s)
+        else:
+            if len(current) >= 3:
+                clusters.append(current)
+            current = [s] if action in _DISTRIBUTABLE_LABELS else []
+            current_label = action
+    if len(current) >= 3:
+        clusters.append(current)
+
+    if not clusters:
+        return decisions
+
+    decision_by_scene = {d["scene"]: d for d in decisions}
+    distributed_groups = 0
+
+    for cluster in clusters:
+        # 클러스터의 결정 파악
+        keep_or_partial = []
+        cut_scenes = []
+        for s in cluster:
+            d = decision_by_scene.get(s["id"], {"decision": "keep"})
+            if d.get("decision") == "cut":
+                cut_scenes.append(s)
+            else:
+                keep_or_partial.append(s)
+
+        # 혼재 패턴(일부만 keep, 일부만 cut)일 때만 분배
+        if not keep_or_partial or not cut_scenes:
+            continue
+
+        label = cluster[0].get("action", "")
+        # cut됐던 씬을 1윈도우 partial로 복원 (모션 높은 윈도우)
+        # keep_or_partial은 partial로 축소 (이미 partial이면 그대로 두되 너무 길면 1윈도우)
+        for s in cluster:
+            d = decision_by_scene.get(s["id"])
+            wids = s.get("window_ids", [])
+            if not wids:
+                continue
+
+            best_wid = max(
+                wids,
+                key=lambda w: all_windows[w].get("motion", 0.0) if 0 <= w < len(all_windows) else 0.0,
+            )
+
+            if d is None:
+                d = {"scene": s["id"]}
+                decisions.append(d)
+                decision_by_scene[s["id"]] = d
+
+            if d.get("decision") == "cut":
+                # cut → 1윈도우 partial 복원
+                d["decision"] = "partial"
+                d["keep_windows"] = [best_wid]
+                d["reason"] = f"(클러스터분배·{label}) 흐름 유지 위해 1윈도우 복원"
+            elif d.get("decision") == "keep" and len(wids) > 1:
+                # keep → 1윈도우 partial로 축소
+                d["decision"] = "partial"
+                d["keep_windows"] = [best_wid]
+                d["reason"] = f"(클러스터분배·{label}) 균등 분배 위해 1윈도우 축소"
+            elif d.get("decision") == "partial":
+                kw = d.get("keep_windows", [])
+                if len(kw) > 1:
+                    d["keep_windows"] = kw[:1]
+                    d["reason"] = f"(클러스터분배·{label}) 균등 분배 위해 1윈도우 축소"
+
+        distributed_groups += 1
+
+    if distributed_groups:
+        _log(f"활동 클러스터 분배: {distributed_groups}개 그룹을 균등 1윈도우 partial로 보정")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
 # PARTIAL / KEEP / CUT 적용
 # ---------------------------------------------------------------------------
 
@@ -1414,6 +1534,7 @@ def run_narrative_editing(
 
     # 모든 영상 파일에 최소 1씬 보장 (흐름 끊김 방지)
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
+    decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -1475,6 +1596,7 @@ def run_narrative_editing(
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
+        decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1672,10 +1794,19 @@ __DURATION_GUIDE__
 - 같은 활동/장소가 이미 다른 씬에서 다뤄진 반복
 - **활용도 낮은 영상은 통째로 cut OK** — 모든 영상을 살릴 필요 없음 (사용자 패턴: 30%는 통째 미사용)
 
-### 5. 비슷한 씬이 여러 개
-- 같은 라벨이 반복되면 **모션 높은 것** 1~2개만 keep/partial, 나머지 cut
-- 같은 활동이라도 시간대/장소 다르면 반복 아님 (아침 요리 vs 저녁 요리)
+### 5. 비슷한 씬이 여러 개 (시간순 분리됨)
+- 같은 라벨이 **시간 흐름상 떨어져** 반복되면 **모션 높은 것** 1~2개만 keep, 나머지 cut
+- 예: 아침 요리 + 저녁 요리는 시간대 다름 → 둘 다 keep 가능
 - **한 영상에서 여러 짧은 컷 OK** (사용자도 한 영상에서 1~9개 컷 사용)
+
+### 5-2. ⭐ 활동 클러스터는 균등 분배 (매우 중요)
+같은 라벨이 **시간순 인접해 여러 씬에 연속**해 있으면 (예: 셋업이 영상 5개에 걸쳐 진행),
+**모든 씬에서 짧게 1윈도우씩** 가져오세요. 한쪽만 길게 keep + 나머지 통째 cut은 금지.
+
+❌ 나쁜 예: S5 setting_up keep(전체) + S6, S7, S8 cut → 흐름 끊김, 시청자 지루
+✅ 좋은 예: S5, S6, S7, S8 각 partial([윈도우 1개씩]) → 짧게짧게 자연스러운 흐름
+
+특히 **텐트/타프 셋업, 요리 과정, 불멍 시퀀스**는 시간 흐름이 있는 활동이라 분배 필수.
 
 ### 6. 흐름 보장 (느슨한 보호)
 - 인트로(도착) → 셋업 → 활동 → 여유 → 마무리(철수) 큰 흐름은 살아있어야 함
@@ -2003,6 +2134,7 @@ def run_narrative_editing_claude(
     decisions = _cap_long_scenes(decisions, scenes, all_windows)
     decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
     decisions = _ensure_all_files_present(decisions, scenes, all_windows)
+    decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2070,6 +2202,7 @@ def run_narrative_editing_claude(
         decisions = _cap_long_scenes(decisions, scenes, all_windows)
         decisions = _protect_speech_in_partial(decisions, scenes, all_windows)
         decisions = _ensure_all_files_present(decisions, scenes, all_windows)
+        decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
