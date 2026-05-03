@@ -1004,7 +1004,8 @@ def _force_trim_to_target(
 
     _log(f"강제 trim 시작: 현재 {initial/60:.1f}분 > 목표 {target_minutes}분 ({max_sec/60:.1f}분 한도)")
 
-    # 점수 오름차순 + 비말소리 우선
+    # 점수 오름차순만 — 말/비말 구분 없이 가장 가치 낮은 씬부터 cut
+    # (사용자 요청: 비말 먼저 처리하면 흐름 깰 수 있음)
     sortable = []
     for d in decisions:
         if d.get("decision") == "cut":
@@ -1013,14 +1014,12 @@ def _force_trim_to_target(
         if not scene:
             continue
         score = scene.get("score", 0)
-        has_speech = scene.get("has_speech", False)
-        # 비말소리(0) 먼저 처리, 말소리는 score 낮은 것부터
-        sortable.append((0 if not has_speech else 1, score, d, scene))
+        sortable.append((score, d, scene))
 
-    sortable.sort(key=lambda x: (x[0], x[1]))
+    sortable.sort(key=lambda x: x[0])
 
     trimmed_count = 0
-    for _, _, d, scene in sortable:
+    for _, d, scene in sortable:
         if calc_total() <= max_sec:
             break
 
