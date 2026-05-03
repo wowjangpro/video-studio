@@ -865,7 +865,7 @@ def _ensure_all_files_present(
     통째로 cut했다면 그건 보통 합리적 판단이므로 강제 복원하지 않는다.
     단, 영상에 점수 높은 씬(say >= 35)이 있으면 LLM 누락일 가능성이 있어 복원.
     """
-    SCORE_THRESHOLD = 0  # 모든 영상 보존 (사용자 요청: 흐름 유지 위해 짧게라도 1씬 필수)
+    SCORE_THRESHOLD = 100  # 사실상 비활성화 — Pre-analysis 결과를 따라 LLM이 흐름 판단
 
     decision_by_scene = {d["scene"]: d for d in decisions}
 
@@ -1713,9 +1713,11 @@ def run_hybrid_editing(
     progress_callback=None,
     editing_comment: str = "",
     target_minutes: int = 0,
+    files: list[dict] | None = None,
 ) -> list[dict]:
     """1차 편집: Claude에 전체 장면을 보여주고 쓸모없는 장면만 제거
 
+    Pre-analysis(전체 흐름 분석) 후 편집.
     scoring/budget/hard_trim 없이, Claude가 맥락을 보고 직접 판단.
     """
     if not scenes:
@@ -1734,6 +1736,7 @@ def run_hybrid_editing(
         progress_callback=progress_callback,
         editing_comment=editing_comment,
         target_minutes=target_minutes,
+        files=files,
     )
 
     total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
@@ -1751,6 +1754,10 @@ def run_hybrid_editing(
 
 CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 시청자가 끝까지 보는 **지루하지 않은 영상**으로 편집하세요. 컷이 길어지면 시청자가 빠져나갑니다.
+
+## 사전 분석 — 전체 영상의 흐름 (이 분석을 따라 편집 결정)
+
+__FLOW_ANALYSIS__
 
 ## 레퍼런스 스타일
 
@@ -2023,6 +2030,96 @@ def _split_storyboard_to_files(storyboard: str, scenes: list[dict], num_parts: i
     return results
 
 
+FLOW_ANALYSIS_PROMPT = """당신은 캠핑/아웃도어 브이로그 편집자입니다.
+본격 편집 전에 **전체 영상의 흐름을 먼저 분석**합니다. 부분적 판단이 아닌 큰 그림을 봅니다.
+
+## 영상 클립 목록 (촬영 순서)
+
+__FILES_LIST__
+
+## 전체 스토리보드 (요약)
+
+__STORYBOARD__
+
+## 편집자 요청
+
+__EDITING_COMMENT__
+
+## 목표 시간
+
+완성본 전체 길이 약 __TARGET_MIN__분
+
+## 분석 요청
+
+다음 항목을 자유로운 한국어 문장으로 서술하세요 (JSON 아님):
+
+### 1. 전체 영상의 큰 흐름
+시간 흐름에 따른 단계로 정리. 각 단계의 시작/끝 씬 ID 포함.
+예: "출발(S1~S3) → 도착·셋업(S4~S15) → 첫 식사(S16~S20) → 오후 활동(S21~S30) → 저녁 요리(S31~S40) → 불멍(S41~S45) → 취침/아침(S46~S52) → 철수(S53~S60)"
+
+### 2. 핵심 보존 씬 (5~10개)
+흐름의 전환점 — 절대 cut 금지인 씬. 씬 ID와 이유 함께.
+예: "S4 도착 순간, S15 셋업 완성, S31 저녁 요리 시작, S41 불멍 시작, S60 철수 마지막 컷"
+
+### 3. 활동 클러스터 (시간순 인접한 같은 활동)
+여러 영상에 걸쳐 진행되는 활동. 모든 멤버 영상에서 짧게 1컷씩 분배해야 함.
+예: "셋업 클러스터(S4~S15): 클립 5,6,7,8 연속 — 각 영상에서 짧게 1~2개씩 keep"
+
+### 4. 활용도 낮지만 흐름 위해 짧게 keep할 영상
+통째로 빠지면 시간 흐름에 공백이 생기는 영상. 영상명/클립번호와 추천 길이.
+예: "클립 12(20260319_140523.mp4): 별 활동 없지만 셋업과 식사 사이를 잇는 인서트로 5초 정도"
+
+### 5. 편집 전략 (3~5문장 요약)
+목표 __TARGET_MIN__분에 맞추기 위한 핵심 결정 방향.
+예: "총 89분 원본을 30분으로. 셋업/요리/식사/불멍 각 활동 클러스터를 5~6개 짧은 컷으로 분배. 운전·이동은 단축. 말소리 씬은 대사 핵심만 partial로 keep, 사이 여백 cut."
+
+이 분석은 후속 편집 단계의 가이드가 됩니다. 너무 길지 않게, 명확하게.
+"""
+
+
+def analyze_overall_flow_claude(
+    compact_storyboard: str,
+    files: list[dict],
+    editing_comment: str,
+    target_minutes: int,
+    total_min: int,
+    progress_callback=None,
+) -> str:
+    """편집 전 Claude에게 전체 흐름 분석 요청.
+
+    분석 결과(텍스트)를 메인 편집 프롬프트의 컨텍스트로 주입한다.
+    부분적 판단이 아닌 전체 흐름을 먼저 보게 하여 통째 cut/길게 keep 같은
+    극단적 결정을 줄임.
+    """
+    from claude_client import call_claude_text
+
+    files_list = "\n".join(
+        f"- 클립 {i+1}: {f.get('name', '?')} ({f.get('duration', 0):.0f}s)"
+        for i, f in enumerate(files)
+    )
+    target_str = str(target_minutes) if target_minutes > 0 else f"원본의 30~50% (약 {int(total_min*0.4)})"
+    comment_str = editing_comment if editing_comment else "(별도 요청 없음)"
+
+    prompt = (
+        FLOW_ANALYSIS_PROMPT
+        .replace("__FILES_LIST__", files_list)
+        .replace("__STORYBOARD__", compact_storyboard)
+        .replace("__EDITING_COMMENT__", comment_str)
+        .replace("__TARGET_MIN__", target_str)
+    )
+
+    if progress_callback:
+        progress_callback("editing", 81, "전체 영상 흐름 분석 중 (Claude)...")
+
+    _log(f"전체 흐름 분석 호출... (프롬프트 {len(prompt)}자)")
+    response = call_claude_text(prompt, model="claude-opus-4-7", timeout=900)
+    if response:
+        _log(f"=== 전체 흐름 분석 결과 ({len(response)}자) ===\n{response[:2000]}\n=== 분석 끝 ===")
+    else:
+        _log("전체 흐름 분석: 응답 없음 — 분석 없이 진행")
+    return response or ""
+
+
 def run_narrative_editing_claude(
     scenes: list[dict],
     all_windows: list[dict],
@@ -2030,6 +2127,7 @@ def run_narrative_editing_claude(
     progress_callback=None,
     editing_comment: str = "",
     target_minutes: int = 0,
+    files: list[dict] | None = None,
 ) -> list[dict]:
     """Claude 기반 내러티브 편집 — 요약 프롬프트 + 상세 파일 참조"""
     from claude_client import check_claude_available, call_claude_text
@@ -2057,6 +2155,15 @@ def run_narrative_editing_claude(
     keep_min_low = int(total_min * 0.5)
     keep_min_high = int(total_min * 0.7)
     _log(f"요약 스토리보드: {len(compact)}자, 상세: {len(detailed)}자, 원본 {total_min}분")
+
+    # ── Pre-analysis: 전체 흐름 분석 ──
+    # 부분적 결정을 피하기 위해 큰 그림을 먼저 파악
+    flow_analysis = ""
+    if files:
+        flow_analysis = analyze_overall_flow_claude(
+            compact, files, editing_comment, target_minutes, total_min,
+            progress_callback=progress_callback,
+        )
 
     # 상세 스토리보드를 임시 파일로 분할 저장
     detail_parts = _split_storyboard_to_files(detailed, scenes)
@@ -2106,6 +2213,7 @@ def run_narrative_editing_claude(
             .replace("__TOTAL_DURATION__", f"{total_min}분")
             .replace("__DURATION_GUIDE__", default_guide)
             .replace("__EDITING_STYLE__", editing_style)
+            .replace("__FLOW_ANALYSIS__", flow_analysis or "(흐름 분석 없음 — 스토리보드를 직접 보고 판단)")
             .replace("=== 요약 스토리보드 ===", f"{comment_section}=== 요약 스토리보드 ===")
         )
 

@@ -486,6 +486,7 @@ def main():
                     progress_callback=progress,
                     editing_comment=editing_comment,
                     target_minutes=target_minutes,
+                    files=files,
                 )
             log(f"내러티브 편집 완료: {len(keep_segments)}개 KEEP")
 
@@ -907,6 +908,7 @@ def main():
                 progress_callback=progress,
                 editing_comment=editing_comment,
                 target_minutes=target_minutes,
+                files=files,
             )
         log(f"내러티브 편집 완료: {len(keep_segments)}개 KEEP")
 
