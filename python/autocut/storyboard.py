@@ -1359,6 +1359,138 @@ def _exclude_static_and_shaky(
 
 
 # ---------------------------------------------------------------------------
+# 발화 흐름 보호 (시청자 대상 설명/내레이션 끊김 방지)
+# ---------------------------------------------------------------------------
+
+def _identify_speech_flows(
+    scenes: list[dict],
+    all_windows: list[dict],
+    min_duration_sec: float = 15.0,
+    min_transcript_chars: int = 30,
+) -> list[dict]:
+    """연속된 has_speech 윈도우를 의미 단위 발화 흐름으로 묶음.
+
+    조건:
+      - 인접 has_speech 윈도우 (gap 1윈도우 이내 허용)
+      - 그룹 길이 >= 15초 (의성어/감탄사 단발 제외)
+      - 그룹 transcript 글자 수 >= 30 (의미 있는 발화)
+
+    반환: [{"window_ids": [...], "scene_ids": {...}, "transcript": "...", "duration": float}]
+    """
+    speech_wids = sorted(
+        wid for wid, w in enumerate(all_windows)
+        if window_has_speech(w)
+    )
+    if not speech_wids:
+        return []
+
+    # 윈도우 ID → scene ID 매핑
+    wid_to_scene: dict[int, int] = {}
+    for s in scenes:
+        for wid in s.get("window_ids", []):
+            wid_to_scene[wid] = s["id"]
+
+    flows: list[dict] = []
+    current: list[int] = [speech_wids[0]]
+
+    for wid in speech_wids[1:]:
+        # 인접 (1윈도우 갭 허용 = 짧은 침묵 끼어도 같은 발화)
+        if wid - current[-1] <= 2:
+            current.append(wid)
+        else:
+            if len(current) >= 1:
+                flows.append(current)
+            current = [wid]
+    flows.append(current)
+
+    # 의미 있는 그룹만 필터
+    result = []
+    for group in flows:
+        if not group:
+            continue
+        # 시간/transcript로 의미 판단
+        first_w = all_windows[group[0]]
+        last_w = all_windows[group[-1]]
+        duration = last_w.get("end", 0) - first_w.get("start", 0)
+        # 그룹의 모든 transcript 합치기 (인접 비말 윈도우 transcript는 무시)
+        transcripts = []
+        for wid in group:
+            t = all_windows[wid].get("transcript", "").strip()
+            if t:
+                transcripts.append(t)
+        full_text = " / ".join(transcripts)
+
+        if duration >= min_duration_sec and len(full_text) >= min_transcript_chars:
+            scene_ids = {wid_to_scene[wid] for wid in group if wid in wid_to_scene}
+            result.append({
+                "window_ids": group,
+                "scene_ids": scene_ids,
+                "transcript": full_text,
+                "duration": duration,
+            })
+
+    return result
+
+
+def _protect_speech_flow(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """의미 있는 발화 흐름이 partial/cut으로 끊기지 않게 보호.
+
+    시청자 대상 설명/내레이션은 의미 단위가 끊기면 시청자가 이해 못함.
+    발화 흐름 그룹의 윈도우들이 partial에서 일부만 keep된 경우 → 그룹 전체 keep.
+    그룹이 cut된 씬에 걸쳐있으면 → 그 씬을 partial로 복원.
+    """
+    flows = _identify_speech_flows(scenes, all_windows)
+    if not flows:
+        return decisions
+
+    decision_by_scene = {d["scene"]: d for d in decisions}
+    scene_map = {s["id"]: s for s in scenes}
+    protected_count = 0
+    restored_count = 0
+
+    for flow in flows:
+        flow_wids = set(flow["window_ids"])
+
+        # flow가 걸치는 씬들의 결정 점검
+        for scene_id in flow["scene_ids"]:
+            scene = scene_map.get(scene_id)
+            if not scene:
+                continue
+            d = decision_by_scene.get(scene_id)
+            scene_wids = set(scene.get("window_ids", []))
+            flow_in_scene = flow_wids & scene_wids
+            if not flow_in_scene:
+                continue
+
+            if d is None or d.get("decision") == "keep":
+                continue  # 이미 전체 keep
+
+            if d.get("decision") == "cut":
+                # cut된 씬에 의미 발화 윈도우 있음 → partial로 복원
+                d["decision"] = "partial"
+                d["keep_windows"] = sorted(flow_in_scene)
+                d["reason"] = f"(발화흐름보호) 시청자 대상 멘트 복원: \"{flow['transcript'][:60]}...\""
+                restored_count += 1
+            elif d.get("decision") == "partial":
+                kw = set(d.get("keep_windows", []))
+                missing = flow_in_scene - kw
+                if missing:
+                    new_kw = sorted(kw | flow_in_scene)
+                    d["keep_windows"] = new_kw
+                    d["reason"] = f"(발화흐름보호) {d.get('reason', '')}".strip()
+                    protected_count += 1
+
+    if protected_count or restored_count:
+        _log(f"발화 흐름 보호: {protected_count}개 partial 보강, {restored_count}개 cut→partial 복원")
+
+    return decisions
+
+
+# ---------------------------------------------------------------------------
 # PARTIAL / KEEP / CUT 적용
 # ---------------------------------------------------------------------------
 
@@ -1698,6 +1830,7 @@ def run_narrative_editing(
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
     decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
+    decisions = _protect_speech_flow(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -1762,6 +1895,7 @@ def run_narrative_editing(
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
         decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
+        decisions = _protect_speech_flow(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -1919,11 +2053,23 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 - **촬영한 영상은 가능하면 모두 짧게라도 사용** (통째 cut 최소화)
 - 한 영상에서 여러 짧은 컷을 골라도 OK (사용자 패턴: 한 영상에서 1~9개 컷)
 
-### 3. 주제 설명/내레이션 말은 흐름 보호
-- ✅ **흐름 보호**: 장비 설명, 요리 해설, 감상/리뷰, 스토리텔링, 캠핑장 소개 등
-  → 말의 의미 단위가 끊기지 않게 keep. 한 주제 발화는 가급적 통째 또는 의미 단위 partial.
-- ❌ **cut 가능한 말**: 의성어/감탄사("어어", "음"), 혼잣말/중얼거림, 같은 말 반복, 침묵
-  → 이런 발화는 흐름에 기여 안 하므로 cut.
+### 3. 주제 설명/내레이션 말은 흐름 보호 ⭐
+**시청자에게 하는 설명/내레이션은 의미 단위가 끊기지 않게 보호.** 끝부분만 남기면 안 됨.
+
+✅ **그룹 전체 keep할 발화** (의미 단위 통째 보존):
+- 장비 설명, 요리 해설, 캠핑장 소개, 감상/리뷰 ("이거 맛있다", "텐트 자리 좋네")
+- 도착·마무리 멘트, 시청자 대상 상황 설명
+- **연속 ★ 윈도우(15초+)에 걸친 한 주제 발화** = 시청자 대상 거의 확실 → 처음~끝 윈도우 모두 keep_windows에 포함
+- 끝부분만 남기지 마세요. 시작·중간·끝이 모두 의미 단위면 전부 keep.
+
+❌ **cut 가능한 말** (의미 없는 발화):
+- 의성어/감탄사 ("어어", "음", "아", "오")
+- 혼잣말/중얼거림, 같은 말 반복
+- 5초 이내 단발 발화 + 화면 활동 없음
+- 말 사이 긴 침묵 (말 끊긴 공백 윈도우)
+
+**판단 기준**: storyboard의 💬 발화 내용을 읽고 "시청자에게 의미 있는가?" 자문.
+의미 있는 멘트가 여러 윈도우에 걸쳐 있으면 **모든 해당 윈도우를 keep_windows에 포함**하세요.
 
 ## 사전 분석 — 전체 영상의 흐름 (이 분석을 따라 편집 결정)
 
@@ -2260,13 +2406,25 @@ __EDITING_COMMENT__
 여러 영상에 걸쳐 진행되는 활동. 모든 멤버 영상에서 짧게 1컷씩 분배해야 함.
 예: "셋업 클러스터(S4~S15): 클립 5,6,7,8 연속 — 각 영상에서 짧게 1~2개씩 keep"
 
-### 4. 활용도 낮지만 흐름 위해 짧게 keep할 영상
-통째로 빠지면 시간 흐름에 공백이 생기는 영상. 영상명/클립번호와 추천 길이.
-예: "클립 12(20260319_140523.mp4): 별 활동 없지만 셋업과 식사 사이를 잇는 인서트로 5초 정도"
+### 4. 발화 흐름 그룹 (시청자 대상 멘트) ⭐
+storyboard의 💬 표시 발화 내용을 분석. **시청자에게 의미 있는 설명/내레이션**이 여러 씬에 걸쳐 이어지는 그룹을 식별.
+각 그룹을 **통째로 keep** 또는 **의미 단위 partial**로 처리해야 함.
 
-### 5. 편집 전략 (3~5문장 요약)
+식별 기준:
+- 한 주제로 이어지는 발화 (장비 설명, 요리 해설, 도착 멘트, 마무리 멘트)
+- 15초+ 연속 발화 = 거의 시청자 대상
+
+예: "그룹 A (S5~S7): 텐트 자리 소개 멘트, 통째 keep / 그룹 B (S22~S24): 음식 맛 평가, 통째 keep"
+
+cut 가능한 발화: 의성어("어어"), 혼잣말, 5초 이내 단발 + 활동 없음.
+
+### 5. 활용도 낮지만 흐름 위해 짧게 keep할 영상
+통째로 빠지면 시간 흐름에 공백이 생기는 영상. 영상명/클립번호와 추천 길이.
+예: "클립 12(20260319_140523.mp4): 별 활동 없지만 셋업과 식사 사이 인서트로 5초"
+
+### 6. 편집 전략 (3~5문장 요약)
 목표 __TARGET_MIN__분에 맞추기 위한 핵심 결정 방향.
-예: "총 89분 원본을 30분으로. 셋업/요리/식사/불멍 각 활동 클러스터를 5~6개 짧은 컷으로 분배. 운전·이동은 단축. 말소리 씬은 대사 핵심만 partial로 keep, 사이 여백 cut."
+예: "총 89분 원본을 30분으로. 셋업/요리/식사/불멍 각 활동 클러스터를 5~6개 짧은 컷으로 분배. 운전·이동·정적 화면 cut. 시청자 대상 멘트(그룹 A, B, C)는 의미 단위 통째 keep."
 
 이 분석은 후속 편집 단계의 가이드가 됩니다. 너무 길지 않게, 명확하게.
 """
@@ -2453,6 +2611,7 @@ def run_narrative_editing_claude(
     decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
     decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
+    decisions = _protect_speech_flow(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2523,6 +2682,7 @@ def run_narrative_editing_claude(
         decisions = _distribute_activity_clusters(decisions, scenes, all_windows)
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
         decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
+        decisions = _protect_speech_flow(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
