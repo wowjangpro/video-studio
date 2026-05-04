@@ -845,7 +845,9 @@ def _calc_nonspeech_keep_min(
             if 0 <= wid < len(all_windows):
                 w = all_windows[wid]
                 if not window_has_speech(w):
-                    nonspeech_sec += w.get("end", 0) - w.get("start", 0)
+                    w_start = w.get("start") if w.get("start") is not None else w.get("globalStart", 0)
+                    w_end = w.get("end") if w.get("end") is not None else w.get("globalEnd", 0)
+                    nonspeech_sec += w_end - w_start
 
     return nonspeech_sec / 60.0
 
@@ -980,9 +982,17 @@ def _force_trim_to_target(
                 for wid in wids:
                     if 0 <= wid < len(all_windows):
                         w = all_windows[wid]
-                        total += w.get("end", 0) - w.get("start", 0)
+                        w_start = w.get("start") if w.get("start") is not None else w.get("globalStart", 0)
+                        w_end = w.get("end") if w.get("end") is not None else w.get("globalEnd", 0)
+                        total += w_end - w_start
             else:  # keep
-                total += scene["end"] - scene["start"]
+                s_start = scene.get("start")
+                s_end = scene.get("end")
+                if s_start is None:
+                    s_start = scene.get("globalStart", 0)
+                if s_end is None:
+                    s_end = scene.get("globalEnd", 0)
+                total += s_end - s_start
         return total
 
     # 보호 대상 씬 ID
@@ -1441,9 +1451,16 @@ def _identify_speech_flows(
         if not group:
             continue
         # 시간/transcript로 의미 판단
+        # 윈도우는 start/end (로컬) 또는 globalStart/globalEnd (전역) 둘 다 가능
         first_w = all_windows[group[0]]
         last_w = all_windows[group[-1]]
-        duration = last_w.get("end", 0) - first_w.get("start", 0)
+        first_start = first_w.get("start")
+        if first_start is None:
+            first_start = first_w.get("globalStart", 0)
+        last_end = last_w.get("end")
+        if last_end is None:
+            last_end = last_w.get("globalEnd", 0)
+        duration = last_end - first_start
         # 그룹의 모든 transcript 합치기 (인접 비말 윈도우 transcript는 무시)
         transcripts = []
         for wid in group:
