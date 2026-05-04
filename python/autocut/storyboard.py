@@ -1341,8 +1341,17 @@ def _exclude_static_and_shaky(
 
     보호 대상(첫/마지막/말소리/주요 활동 라벨)은 cut 안 함.
     """
-    STATIC_MOTION = 0.005    # 거의 정지
-    SHAKY_MOTION = 0.15      # 매우 높은 모션 (의도된 손동작은 보통 0.03~0.08)
+    # 라벨별 정적 임계값 (촬영자 행동 우선)
+    # 장비/풍경/휴식은 화면 변화 적어도 의도된 컨텐츠일 수 있지만,
+    # 사람 행동 없는 정적 화면이 길게 들어가는 건 지루.
+    LABEL_STATIC_THRESHOLD = {
+        "showing_gear": 0.018,   # 장비 화면 — 사람 손동작 없으면 적극 cut
+        "resting": 0.012,        # 휴식 — 정지 화면 많음
+        "scenery": 0.008,        # 풍경 — 자연의 미세 움직임도 의미
+        "dark": 0.008,           # 야경 — 마찬가지
+    }
+    DEFAULT_STATIC = 0.005       # 그 외 라벨: 매우 낮은 motion만 cut
+    SHAKY_MOTION = 0.15          # 매우 높은 모션 (의도된 손동작은 보통 0.03~0.08)
 
     scene_map = {s["id"]: s for s in scenes}
     decision_by_scene = {d["scene"]: d for d in decisions}
@@ -1375,23 +1384,22 @@ def _exclude_static_and_shaky(
 
         avg_motion = scene.get("avg_motion", 0.0)
         has_speech = scene.get("has_speech", False)
+        action = scene.get("action", "")
 
         # 말소리는 흐름 보호 — 정적/흔들림 분기에서 제외
         if has_speech:
             continue
 
-        # 정적 장면: 매우 낮은 모션 + 비말소리
-        if avg_motion < STATIC_MOTION:
+        # 정적 장면: 라벨별 임계값 (장비/휴식은 더 엄격하게 cut)
+        threshold = LABEL_STATIC_THRESHOLD.get(action, DEFAULT_STATIC)
+        if avg_motion < threshold:
             d["decision"] = "cut"
             d.pop("keep_windows", None)
-            d["reason"] = f"(자동cut·정적·M={avg_motion:.4f}) {d.get('reason', '')}"
+            d["reason"] = f"(자동cut·정적·{action}·M={avg_motion:.4f}<{threshold}) {d.get('reason', '')}"
             static_cut += 1
             continue
 
         # 흔들림 장면: 매우 높은 모션 + 비말소리 + 활동 라벨이 명확하지 않음
-        # cooking/eating은 손동작으로 모션 높을 수 있어 제외
-        # setting_up/walking에서 매우 높은 모션 = 카메라 이동(흔들림)
-        action = scene.get("action", "")
         if avg_motion > SHAKY_MOTION and action not in ("cooking", "eating", "fire_tending"):
             d["decision"] = "cut"
             d.pop("keep_windows", None)
@@ -2409,13 +2417,18 @@ __DURATION_GUIDE__
   - 7+윈도우 씬 → `keep_windows: [0, 4]` 또는 핵심 1개
 
 ### 4. CUT 대상 (적극) — 의미 없는 화면 적극 제거
+**핵심 원칙: 촬영자/주인공의 행동이 있는 장면 우선. 사물만 보이는 정지 화면은 불필요.**
+
+- **장비 정지 화면 (showing_gear, M:저)** — 사람 손 없이 장비만 비추는 화면 = cut. 사람이 장비를 만지거나 조작하는 장면만 keep
 - **카메라 셋팅 중 흔들림/이동** — 셋업하면서 카메라가 이리저리 흔들린 구간
 - **피사체 고정 정적 장면** — 테이블만, 의자만, 빈 풍경만 보이는 변화 없는 화면
 - **M:저이면서 화면 변화 없는 장면** — 시청자가 지루
 - 차량 운전(driving), 주차장/도로 단순 이동 (말소리 없음)
 - 흔들림/NG, 의미 없는 촬영 (피사체 못 알아볼 정도)
 - 같은 활동/장소가 이미 다른 씬에서 다뤄진 반복
-- desc(설명)에 "테이블", "의자", "빈 ~" 같은 표현만 있고 활동 없는 씬
+- desc(설명)에 "테이블", "의자", "빈 ~", "장비만 놓여있다" 같은 표현 → activity 없으면 cut
+
+**활동 vs 정지 판단법**: desc에 "X가 ~하고 있다"(주인공 행동)면 keep, "X가 보인다"(사물만)면 cut 후보.
 
 ### 5. 비슷한 씬이 여러 개 (시간순 분리됨)
 - 같은 라벨이 **시간 흐름상 떨어져** 반복되면 **모션 높은 것** 1~2개만 keep, 나머지 cut
