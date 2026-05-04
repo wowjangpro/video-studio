@@ -949,6 +949,7 @@ def _force_trim_to_target(
     all_windows: list[dict],
     target_minutes: int,
     tolerance: float = 1.05,
+    classified_flows: list[dict] | None = None,
 ) -> list[dict]:
     """목표 시간 초과 시 강제로 trim해서 target_minutes ± tolerance에 맞춤.
 
@@ -1006,11 +1007,14 @@ def _force_trim_to_target(
         action = s.get("action", "")
         if action not in label_top or s.get("score", 0) > label_top[action].get("score", 0):
             label_top[action] = s
-    # 시청자 대상 발화 그룹이 있는 씬은 보호 (의미 있는 멘트)
-    speech_flows = _identify_speech_flows(scenes, all_windows)
+    # 시청자 대상(A)/활동 연계(B) 발화 그룹이 있는 씬만 보호.
+    # C/D(혼잣말, 노이즈)는 보호 안 함 — 강제 trim에서 자유롭게 cut 가능.
+    speech_flows = classified_flows if classified_flows is not None else _identify_speech_flows(scenes, all_windows)
     speech_flow_scene_ids: set[int] = set()
     for flow in speech_flows:
-        speech_flow_scene_ids.update(flow["scene_ids"])
+        cat = flow.get("category", "A")
+        if cat in ("A", "B"):
+            speech_flow_scene_ids.update(flow["scene_ids"])
     protected_ids.update(speech_flow_scene_ids)
     for s in label_top.values():
         protected_ids.add(s["id"])
@@ -1409,7 +1413,11 @@ def _identify_speech_flows(
     all_windows: list[dict],
     min_duration_sec: float = 10.0,
     min_transcript_chars: int = 20,
+    use_cache: bool = True,
 ) -> list[dict]:
+    # 분류 캐시가 있으면 우선 반환 (메인 편집 시 분류된 결과를 후처리에서 재사용)
+    if use_cache and _LAST_CLASSIFIED_FLOWS is not None:
+        return _LAST_CLASSIFIED_FLOWS
     """연속된 has_speech 윈도우를 의미 단위 발화 흐름으로 묶음.
 
     조건:
@@ -1476,9 +1484,117 @@ def _identify_speech_flows(
                 "scene_ids": scene_ids,
                 "transcript": full_text,
                 "duration": duration,
+                "category": "?",  # 후속 분류 단계에서 채움 (A/B/C/D)
             })
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# 발화 그룹 분류 (Claude) — A/B/C/D 라벨링
+# ---------------------------------------------------------------------------
+
+SPEECH_CLASSIFY_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
+아래 발화 그룹들을 4가지로 분류하세요. 각 그룹은 영상에 포함된 연속 발화의 transcript입니다.
+
+## 분류 기준
+
+- **A**: 시청자 대상 (필수 보존) — 카메라/시청자에게 하는 설명, 소개, 감상, 인사, 채널 멘트, 상황 안내
+- **B**: 활동 연계 대화 (보존) — 동행자/일행과 활동 중 의미 있는 대화 (요리·셋업 의논 등)
+- **C**: 혼잣말/반려동물 대화 (불필요) — 강아지/고양이에게 하는 말, 단순 혼잣말, 감탄
+- **D**: 노이즈/무의미 (cut 권장) — 의성어만, 내용 모호, 짧고 의미 없는 발화
+
+## 발화 그룹 목록
+
+__FLOWS__
+
+## 출력 형식
+
+JSON 배열만 출력. 각 항목은 {"id": 그룹번호, "category": "A"|"B"|"C"|"D", "reason": "한 줄"}.
+
+```json
+[
+  {"id": 1, "category": "A", "reason": "도착 멘트"},
+  {"id": 2, "category": "C", "reason": "강아지 부르기"},
+  ...
+]
+```
+"""
+
+
+# 분류된 발화 그룹 캐시 (편집 1회 동안 유지) — 후처리에서 재사용
+_LAST_CLASSIFIED_FLOWS: list[dict] | None = None
+
+
+def _classify_speech_flows_claude(
+    flows: list[dict],
+    progress_callback=None,
+) -> list[dict]:
+    """Claude로 발화 그룹을 A/B/C/D로 분류. 결과를 flows 각 항목의 category에 반영.
+
+    실패 시 모두 'A'로 보수적 처리 (보호 우선).
+    """
+    if not flows:
+        return flows
+
+    from claude_client import call_claude_text
+
+    flow_lines = []
+    for i, f in enumerate(flows):
+        text = f["transcript"]
+        if len(text) > 200:
+            text = text[:200] + "..."
+        flow_lines.append(
+            f"[{i+1}] ({f['duration']:.0f}초) \"{text}\""
+        )
+    flows_text = "\n".join(flow_lines)
+    prompt = SPEECH_CLASSIFY_PROMPT.replace("__FLOWS__", flows_text)
+
+    if progress_callback:
+        progress_callback("editing", 82, f"발화 그룹 {len(flows)}개 분류 중 (Claude)...")
+
+    _log(f"발화 그룹 분류 호출... ({len(flows)}개, 프롬프트 {len(prompt)}자)")
+    response = call_claude_text(prompt, model="claude-opus-4-7", timeout=600)
+
+    if not response:
+        _log("발화 분류: 응답 없음, 모두 'A'로 보수 처리")
+        for f in flows:
+            f["category"] = "A"
+        return flows
+
+    # JSON 파싱
+    import re as _re
+    m = _re.search(r"\[\s*\{.*?\}\s*\]", response, _re.DOTALL)
+    if not m:
+        _log("발화 분류: JSON 파싱 실패, 모두 'A'로 보수 처리")
+        for f in flows:
+            f["category"] = "A"
+        return flows
+
+    try:
+        classified = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        _log("발화 분류: JSON 디코드 실패, 모두 'A'로 보수 처리")
+        for f in flows:
+            f["category"] = "A"
+        return flows
+
+    # id → category 매핑
+    id_to_cat = {item.get("id"): item.get("category", "A") for item in classified}
+    cat_count = {"A": 0, "B": 0, "C": 0, "D": 0}
+    for i, f in enumerate(flows):
+        cat = id_to_cat.get(i + 1, "A")
+        if cat not in ("A", "B", "C", "D"):
+            cat = "A"
+        f["category"] = cat
+        cat_count[cat] = cat_count.get(cat, 0) + 1
+    _log(f"발화 분류 완료: A {cat_count['A']}개, B {cat_count['B']}개, C {cat_count['C']}개, D {cat_count['D']}개")
+
+    # module 캐시에 저장 — 후처리 _protect_speech_flow 등에서 재사용
+    global _LAST_CLASSIFIED_FLOWS
+    _LAST_CLASSIFIED_FLOWS = flows
+
+    return flows
 
 
 def _protect_speech_flow(
@@ -1502,6 +1618,12 @@ def _protect_speech_flow(
     restored_count = 0
 
     for flow in flows:
+        # A/B만 보호 (시청자 대상 / 활동 연계 대화)
+        # C/D는 LLM 자율 판단 — 보호 안 함
+        cat = flow.get("category", "A")
+        if cat not in ("A", "B"):
+            continue
+
         flow_wids = set(flow["window_ids"])
 
         # flow가 걸치는 씬들의 결정 점검
@@ -2142,11 +2264,14 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 
 __FLOW_ANALYSIS__
 
-## 🎤 식별된 발화 흐름 그룹 (시청자 대상 멘트 후보)
+## 🎤 식별된 발화 흐름 그룹 (사전 분류 완료)
 
-아래 그룹들은 **연속된 의미 있는 발화**입니다. 각 그룹의 발화 내용을 읽고:
-- A(시청자 대상) / B(동행자 대화 + 활동 연계) → **그룹의 모든 W 윈도우를 keep_windows에 포함** (끝부분만 남기지 X)
-- C(혼잣말/감탄사) / D(무의미) → cut 또는 partial로 일부만
+아래 그룹들은 **연속된 발화**이며 이미 A/B/C/D로 분류되어 있습니다:
+
+- **·A** (시청자 대상): 그룹의 모든 W 윈도우를 keep_windows에 포함 — **끝부분만 남기지 X**
+- **·B** (활동 연계 대화): 보통 보존, 활동 영상과 함께 partial keep
+- **·C** (혼잣말/반려동물 대화): **자유롭게 cut 가능** — 흐름에 기여 안 하면 빼세요
+- **·D** (노이즈/무의미): cut 권장
 
 __SPEECH_FLOWS__
 
@@ -2576,6 +2701,10 @@ def run_narrative_editing_claude(
     if progress_callback:
         progress_callback("editing", 83, "스토리보드 생성 중...")
 
+    # 새 편집 세션: 발화 분류 캐시 초기화 (이전 편집의 분류가 남아있지 않게)
+    global _LAST_CLASSIFIED_FLOWS
+    _LAST_CLASSIFIED_FLOWS = None
+
     compact = generate_compact_storyboard(scenes, total_duration)
     detailed = generate_narrative_storyboard(scenes, total_duration)
 
@@ -2584,22 +2713,34 @@ def run_narrative_editing_claude(
     keep_min_high = int(total_min * 0.7)
     _log(f"요약 스토리보드: {len(compact)}자, 상세: {len(detailed)}자, 원본 {total_min}분")
 
-    # ── 발화 흐름 그룹 식별 (시청자 대상 멘트 후보) ──
+    # ── 발화 흐름 그룹 식별 + Claude 분류 (A/B/C/D) ──
     speech_flows = _identify_speech_flows(scenes, all_windows)
     if speech_flows:
+        # Claude로 분류
+        speech_flows = _classify_speech_flows_claude(
+            speech_flows, progress_callback=progress_callback,
+        )
+
         flow_lines = []
         for i, flow in enumerate(speech_flows):
             scene_ids_sorted = sorted(flow["scene_ids"])
             wid_range = f"W{flow['window_ids'][0]}~{flow['window_ids'][-1]}"
             scenes_str = ",".join(f"S{sid:02d}" for sid in scene_ids_sorted)
+            cat = flow.get("category", "?")
             text = flow["transcript"]
             if len(text) > 200:
                 text = text[:200] + "..."
             flow_lines.append(
-                f"- [그룹{i+1}] {scenes_str} {wid_range} ({flow['duration']:.0f}초): \"{text}\""
+                f"- [그룹{i+1}·{cat}] {scenes_str} {wid_range} ({flow['duration']:.0f}초): \"{text}\""
             )
         speech_flows_text = "\n".join(flow_lines)
-        _log(f"발화 그룹 {len(speech_flows)}개 식별 (총 {sum(f['duration'] for f in speech_flows):.0f}초)")
+        cat_summary = {
+            "A": sum(1 for f in speech_flows if f.get("category") == "A"),
+            "B": sum(1 for f in speech_flows if f.get("category") == "B"),
+            "C": sum(1 for f in speech_flows if f.get("category") == "C"),
+            "D": sum(1 for f in speech_flows if f.get("category") == "D"),
+        }
+        _log(f"발화 그룹 {len(speech_flows)}개 식별/분류 — A:{cat_summary['A']} B:{cat_summary['B']} C:{cat_summary['C']} D:{cat_summary['D']}")
     else:
         speech_flows_text = "(식별된 발화 그룹 없음)"
 
@@ -2802,8 +2943,11 @@ def run_narrative_editing_claude(
         current_min = total_keep / 60
         if current_min > target_minutes * 1.07:
             decisions = _force_trim_to_target(
-                decisions, scenes, all_windows, target_minutes, tolerance=1.05
+                decisions, scenes, all_windows, target_minutes, tolerance=1.05,
+                classified_flows=speech_flows,
             )
+            # 강제 trim 후 발화 그룹 한 번 더 보호 (잘린 멘트 복원)
+            decisions = _protect_speech_flow(decisions, scenes, all_windows)
             keep_segments = _apply_decisions(decisions, scenes, all_windows)
             total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
             _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
