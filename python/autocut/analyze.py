@@ -24,6 +24,7 @@ from storyboard import run_narrative_editing_claude, run_scored_editing, run_hyb
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import generate_edl
 from fcpxml_export import generate_fcpxml
+from silence_trim import trim_silence_in_segments
 
 
 def log(msg: str):
@@ -49,8 +50,13 @@ _progress_file = None
 
 def save_analysis_cache_with_scenes(folder_path: str, files: list[dict], options: dict,
                                     windows: list[dict], total_duration: float,
-                                    scenes: list[dict]):
-    """Stage 1+VAD+Stage 2 결과와 scenes 데이터를 캐시 파일에 저장"""
+                                    scenes: list[dict],
+                                    speech_segments: list[dict] | None = None):
+    """Stage 1+VAD+Stage 2 결과와 scenes 데이터를 캐시 파일에 저장.
+
+    speech_segments: STT 발화 타이밍 리스트 [{"start": float, "end": float, "text": str}]
+                     globalStart/globalEnd 기준 (영상 누적 시간).
+    """
     cache = {
         "pipeline": PIPELINE_VERSION,
         "window_duration": int(options.get("window_duration", 10)),
@@ -58,11 +64,12 @@ def save_analysis_cache_with_scenes(folder_path: str, files: list[dict], options
         "total_duration": total_duration,
         "windows": windows,
         "scenes": scenes,
+        "speech_segments": speech_segments or [],
     }
     path = os.path.join(get_autocut_dir(folder_path), ANALYSIS_CACHE_FILE)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False)
-    log(f"분석 캐시 저장 (scenes 포함): {len(windows)}개 윈도우, {len(scenes)}개 장면 → {path}")
+    log(f"분석 캐시 저장: {len(windows)}개 윈도우, {len(scenes)}개 장면, {len(speech_segments or [])}개 발화 → {path}")
 
 
 def load_analysis_cache(folder_path: str, files: list[dict], options: dict) -> tuple[list[dict], float] | None:
@@ -104,8 +111,9 @@ def load_analysis_cache(folder_path: str, files: list[dict], options: dict) -> t
         log("분석 캐시 윈도우 데이터 없음")
         return None
 
-    log(f"분석 캐시 유효: {len(windows)}개 윈도우, {total_duration/60:.1f}분")
-    return windows, total_duration
+    speech_segments = cache.get("speech_segments", [])
+    log(f"분석 캐시 유효: {len(windows)}개 윈도우, {total_duration/60:.1f}분, {len(speech_segments)}개 발화")
+    return windows, total_duration, speech_segments
 
 
 def _run_phase_b(all_window_data: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -425,8 +433,8 @@ def main():
     if not force_reanalyze and not resume:
         cached = load_analysis_cache(folder_path, files, options)
         if cached is not None:
-            all_window_data, cached_duration = cached
-            log(f"분석 캐시 사용: {len(all_window_data)}개 윈도우 → LLM 편집만 실행")
+            all_window_data, cached_duration, cached_speech = cached
+            log(f"분석 캐시 사용: {len(all_window_data)}개 윈도우, {len(cached_speech)}개 발화 → LLM 편집만 실행")
             progress("initializing", 10, f"분석 캐시 로드: {len(all_window_data)}개 윈도우")
 
             # 파일별 누적 시간 테이블 (fileIndex 역산용)
@@ -494,6 +502,10 @@ def main():
             progress("merging", 95, "KEEP 구간 병합 중...")
             merged = merge_adjacent_segments(keep_segments)
             validated = validate_segments(merged)
+
+            # 침묵 trim — STT timing이 캐시에 있으면 1초+ 침묵을 1초로 압축
+            if cached_speech:
+                validated = trim_silence_in_segments(validated, cached_speech)
 
             anchor = {
                 "id": 0, "globalStart": 0.0, "globalEnd": 1.0,
@@ -609,6 +621,10 @@ def main():
         # 모든 윈도우 데이터를 수집 (스토리보드 입력)
         all_window_data: list[dict] = []
 
+        # STT 발화 타이밍 누적 (전체 영상 기준 globalStart/globalEnd)
+        # 후처리에서 keep segment 안의 침묵 trim에 사용
+        all_speech_segments: list[dict] = []
+
         # 재개 시 완료된 파일의 캐시에서 윈도우 데이터 복원
         if resume_state:
             for fi_done in sorted(completed_files):
@@ -685,6 +701,14 @@ def main():
                     transcripts = transcribe_speech_regions(audio_path, speech_regions)
                     if transcripts:
                         map_transcripts_to_windows(transcripts, windows, window_duration)
+                        # globalStart/globalEnd 기준으로 누적 (file_offset 더함)
+                        for tr in transcripts:
+                            all_speech_segments.append({
+                                "start": tr["start"] + file_offset,
+                                "end": tr["end"] + file_offset,
+                                "text": tr.get("text", ""),
+                                "file_index": fi,
+                            })
                     log(f"STT 완료: {len(transcripts)}개 세그먼트 ({time.time()-t_stt:.1f}s)")
                 except Exception as e:
                     log(f"STT 실패 (계속 진행): {e}")
@@ -891,7 +915,10 @@ def main():
         scenes, usable_scenes = _run_phase_b(all_window_data)
 
         # 분석 캐시 저장 (윈도우 + scenes 포함)
-        save_analysis_cache_with_scenes(folder_path, files, options, all_window_data, total_duration, scenes)
+        save_analysis_cache_with_scenes(
+            folder_path, files, options, all_window_data, total_duration, scenes,
+            speech_segments=all_speech_segments,
+        )
 
         # 7. Phase C: 내러티브 편집
         log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면, {len(all_window_data)}개 윈도우 (engine={ai_engine})")
@@ -918,6 +945,12 @@ def main():
         log(f"병합 후: {len(merged)}개")
         validated = validate_segments(merged)
         log(f"검증 후: {len(validated)}개")
+
+        # 침묵 trim — 1초+ 침묵을 1초로 압축
+        if all_speech_segments:
+            before = len(validated)
+            validated = trim_silence_in_segments(validated, all_speech_segments)
+            log(f"침묵 trim 후: {before}개 → {len(validated)}개")
 
         # 편집기 시작 위치 기준용 빈 자막 삽입
         anchor = {
