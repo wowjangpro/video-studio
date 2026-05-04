@@ -1149,6 +1149,12 @@ def _distribute_activity_clusters(
     if not clusters:
         return decisions
 
+    # 발화 그룹 씬은 분배 대상에서 제외 (시청자 대상 멘트 보호)
+    speech_flows = _identify_speech_flows(scenes, all_windows)
+    speech_flow_scene_ids: set[int] = set()
+    for flow in speech_flows:
+        speech_flow_scene_ids.update(flow["scene_ids"])
+
     decision_by_scene = {d["scene"]: d for d in decisions}
     distributed_groups = 0
 
@@ -1175,6 +1181,10 @@ def _distribute_activity_clusters(
         #   - 마지막 씬: 활동 끝 부분 (윈도우 뒷쪽) — 활동 완성/마무리
         #   - 중간 씬들: 모션 높은 윈도우 (대표 컷)
         for idx, s in enumerate(cluster):
+            # 발화 그룹 씬은 분배 안 함 (시청자 대상 멘트 보호)
+            if s["id"] in speech_flow_scene_ids:
+                continue
+
             d = decision_by_scene.get(s["id"])
             wids = s.get("window_ids", [])
             if not wids:
@@ -1387,8 +1397,8 @@ def _exclude_static_and_shaky(
 def _identify_speech_flows(
     scenes: list[dict],
     all_windows: list[dict],
-    min_duration_sec: float = 15.0,
-    min_transcript_chars: int = 30,
+    min_duration_sec: float = 10.0,
+    min_transcript_chars: int = 20,
 ) -> list[dict]:
     """연속된 has_speech 윈도우를 의미 단위 발화 흐름으로 묶음.
 
@@ -2115,6 +2125,14 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 
 __FLOW_ANALYSIS__
 
+## 🎤 식별된 발화 흐름 그룹 (시청자 대상 멘트 후보)
+
+아래 그룹들은 **연속된 의미 있는 발화**입니다. 각 그룹의 발화 내용을 읽고:
+- A(시청자 대상) / B(동행자 대화 + 활동 연계) → **그룹의 모든 W 윈도우를 keep_windows에 포함** (끝부분만 남기지 X)
+- C(혼잣말/감탄사) / D(무의미) → cut 또는 partial로 일부만
+
+__SPEECH_FLOWS__
+
 ## 레퍼런스 스타일
 
 __EDITING_STYLE__
@@ -2549,6 +2567,25 @@ def run_narrative_editing_claude(
     keep_min_high = int(total_min * 0.7)
     _log(f"요약 스토리보드: {len(compact)}자, 상세: {len(detailed)}자, 원본 {total_min}분")
 
+    # ── 발화 흐름 그룹 식별 (시청자 대상 멘트 후보) ──
+    speech_flows = _identify_speech_flows(scenes, all_windows)
+    if speech_flows:
+        flow_lines = []
+        for i, flow in enumerate(speech_flows):
+            scene_ids_sorted = sorted(flow["scene_ids"])
+            wid_range = f"W{flow['window_ids'][0]}~{flow['window_ids'][-1]}"
+            scenes_str = ",".join(f"S{sid:02d}" for sid in scene_ids_sorted)
+            text = flow["transcript"]
+            if len(text) > 200:
+                text = text[:200] + "..."
+            flow_lines.append(
+                f"- [그룹{i+1}] {scenes_str} {wid_range} ({flow['duration']:.0f}초): \"{text}\""
+            )
+        speech_flows_text = "\n".join(flow_lines)
+        _log(f"발화 그룹 {len(speech_flows)}개 식별 (총 {sum(f['duration'] for f in speech_flows):.0f}초)")
+    else:
+        speech_flows_text = "(식별된 발화 그룹 없음)"
+
     # ── Pre-analysis: 전체 흐름 분석 ──
     # 부분적 결정을 피하기 위해 큰 그림을 먼저 파악
     flow_analysis = ""
@@ -2607,6 +2644,7 @@ def run_narrative_editing_claude(
             .replace("__DURATION_GUIDE__", default_guide)
             .replace("__EDITING_STYLE__", editing_style)
             .replace("__FLOW_ANALYSIS__", flow_analysis or "(흐름 분석 없음 — 스토리보드를 직접 보고 판단)")
+            .replace("__SPEECH_FLOWS__", speech_flows_text)
             .replace("=== 요약 스토리보드 ===", f"{comment_section}=== 요약 스토리보드 ===")
         )
 
