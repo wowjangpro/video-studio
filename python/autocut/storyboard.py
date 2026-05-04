@@ -1597,6 +1597,68 @@ def _classify_speech_flows_claude(
     return flows
 
 
+def _auto_cut_d_class_speech(
+    decisions: list[dict],
+    scenes: list[dict],
+    all_windows: list[dict],
+) -> list[dict]:
+    """D 분류된 발화 그룹의 윈도우를 keep_windows에서 자동 제거.
+
+    D 발화 = 노이즈/의성어/무의미 짧은 발화.
+    - 발화 윈도우만 D면 keep_windows에서 제외
+    - 씬의 모든 윈도우가 D 발화면 cut
+    """
+    if _LAST_CLASSIFIED_FLOWS is None:
+        return decisions
+
+    d_window_ids: set[int] = set()
+    for flow in _LAST_CLASSIFIED_FLOWS:
+        if flow.get("category") == "D":
+            d_window_ids.update(flow["window_ids"])
+
+    if not d_window_ids:
+        return decisions
+
+    excluded = 0
+    cut_scenes = 0
+    for d in decisions:
+        decision = d.get("decision", "keep")
+        if decision == "cut":
+            continue
+        scene_id = d.get("scene", -1)
+        scene = next((s for s in scenes if s["id"] == scene_id), None)
+        if not scene:
+            continue
+
+        if decision == "keep":
+            wids = scene.get("window_ids", [])
+        else:  # partial
+            wids = d.get("keep_windows", [])
+        if not wids:
+            continue
+
+        good = [w for w in wids if w not in d_window_ids]
+        bad = [w for w in wids if w in d_window_ids]
+        if not bad:
+            continue
+
+        if not good:
+            d["decision"] = "cut"
+            d.pop("keep_windows", None)
+            d["reason"] = f"(D자동cut·노이즈전체) {d.get('reason', '')}"
+            cut_scenes += 1
+        else:
+            d["decision"] = "partial"
+            d["keep_windows"] = good
+            d["reason"] = f"(D자동cut·{len(bad)}개) {d.get('reason', '')}"
+            excluded += len(bad)
+
+    if excluded or cut_scenes:
+        _log(f"D 노이즈 자동 cut: {excluded}개 윈도우 제외, {cut_scenes}개 씬 전체 cut")
+
+    return decisions
+
+
 def _protect_speech_flow(
     decisions: list[dict],
     scenes: list[dict],
@@ -2002,6 +2064,7 @@ def run_narrative_editing(
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
     decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
     decisions = _protect_speech_flow(decisions, scenes, all_windows)
+    decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2067,6 +2130,7 @@ def run_narrative_editing(
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
         decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
         decisions = _protect_speech_flow(decisions, scenes, all_windows)
+        decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -2093,6 +2157,7 @@ def run_narrative_editing(
             )
             # 강제 trim 후 발화 그룹 한 번 더 보호 (잘린 멘트 복원)
             decisions = _protect_speech_flow(decisions, scenes, all_windows)
+            decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
             keep_segments = _apply_decisions(decisions, scenes, all_windows)
             total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
             _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
@@ -2266,12 +2331,20 @@ __FLOW_ANALYSIS__
 
 ## 🎤 식별된 발화 흐름 그룹 (사전 분류 완료)
 
-아래 그룹들은 **연속된 발화**이며 이미 A/B/C/D로 분류되어 있습니다:
+⚠️ **중요: "talking" 라벨이라고 무조건 시청자 대상이 아닙니다.**
+Stage 2 비전 분석은 화면(말하는 듯한 자세)만으로 talking을 분류해서 **강아지 대화/혼잣말도 talking으로 들어옵니다**.
+반드시 아래 발화 그룹의 **transcript 내용과 A/B/C/D 분류를 보고** 판단하세요.
 
+분류별 처리:
 - **·A** (시청자 대상): 그룹의 모든 W 윈도우를 keep_windows에 포함 — **끝부분만 남기지 X**
 - **·B** (활동 연계 대화): 보통 보존, 활동 영상과 함께 partial keep
-- **·C** (혼잣말/반려동물 대화): **자유롭게 cut 가능** — 흐름에 기여 안 하면 빼세요
-- **·D** (노이즈/무의미): cut 권장
+- **·C** (혼잣말/반려동물 대화): **적극 cut** — 강아지 부르기/단순 감탄/혼잣말은 흐름에 기여 안 함
+- **·D** (노이즈/무의미): **cut 강제** (후처리에서 자동 제거)
+
+**핵심**: talking 라벨 씬을 평가할 때 해당 씬에 속한 발화 그룹의 분류를 먼저 확인.
+- C 그룹 발화면 → 윈도우 1~2개만 partial 또는 cut
+- D 그룹 발화면 → cut (후처리에서 자동)
+- A/B 그룹 발화면 → 윈도우 모두 keep_windows
 
 __SPEECH_FLOWS__
 
@@ -2848,6 +2921,7 @@ def run_narrative_editing_claude(
     decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
     decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
     decisions = _protect_speech_flow(decisions, scenes, all_windows)
+    decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
 
     # 결정 통계 로그
     keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
@@ -2919,6 +2993,7 @@ def run_narrative_editing_claude(
         decisions = _exclude_low_quality_windows(decisions, scenes, all_windows)
         decisions = _exclude_static_and_shaky(decisions, scenes, all_windows)
         decisions = _protect_speech_flow(decisions, scenes, all_windows)
+        decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
 
         keep_count = sum(1 for d in decisions if d.get("decision") == "keep")
         partial_count = sum(1 for d in decisions if d.get("decision") == "partial")
@@ -2948,6 +3023,7 @@ def run_narrative_editing_claude(
             )
             # 강제 trim 후 발화 그룹 한 번 더 보호 (잘린 멘트 복원)
             decisions = _protect_speech_flow(decisions, scenes, all_windows)
+            decisions = _auto_cut_d_class_speech(decisions, scenes, all_windows)
             keep_segments = _apply_decisions(decisions, scenes, all_windows)
             total_keep = sum(s["globalEnd"] - s["globalStart"] for s in keep_segments)
             _log(f"최종(강제trim 후): {len(keep_segments)}개 세그먼트, 전체 {total_keep / 60:.1f}분")
