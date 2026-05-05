@@ -1610,21 +1610,25 @@ def _auto_cut_d_class_speech(
     scenes: list[dict],
     all_windows: list[dict],
 ) -> list[dict]:
-    """D 분류된 발화 그룹의 윈도우를 keep_windows에서 자동 제거.
+    """C/D 분류된 발화 그룹의 윈도우를 keep_windows에서 자동 제거.
 
-    D 발화 = 노이즈/의성어/무의미 짧은 발화.
-    - 발화 윈도우만 D면 keep_windows에서 제외
-    - 씬의 모든 윈도우가 D 발화면 cut
+    - C 발화 = 혼잣말/반려동물 대화 (시청자에게 의미 없음)
+    - D 발화 = 노이즈/의성어/무의미 짧은 발화
+
+    동작:
+    - 발화 윈도우만 C/D면 keep_windows에서 제외
+    - 씬의 모든 윈도우가 C/D면 cut
+    - 비발화 윈도우는 영향 없음 (활동 컷은 그대로 유지)
     """
     if _LAST_CLASSIFIED_FLOWS is None:
         return decisions
 
-    d_window_ids: set[int] = set()
+    cd_window_ids: set[int] = set()
     for flow in _LAST_CLASSIFIED_FLOWS:
-        if flow.get("category") == "D":
-            d_window_ids.update(flow["window_ids"])
+        if flow.get("category") in ("C", "D"):
+            cd_window_ids.update(flow["window_ids"])
 
-    if not d_window_ids:
+    if not cd_window_ids:
         return decisions
 
     excluded = 0
@@ -1645,24 +1649,24 @@ def _auto_cut_d_class_speech(
         if not wids:
             continue
 
-        good = [w for w in wids if w not in d_window_ids]
-        bad = [w for w in wids if w in d_window_ids]
+        good = [w for w in wids if w not in cd_window_ids]
+        bad = [w for w in wids if w in cd_window_ids]
         if not bad:
             continue
 
         if not good:
             d["decision"] = "cut"
             d.pop("keep_windows", None)
-            d["reason"] = f"(D자동cut·노이즈전체) {d.get('reason', '')}"
+            d["reason"] = f"(C/D자동cut·전체혼잣말/노이즈) {d.get('reason', '')}"
             cut_scenes += 1
         else:
             d["decision"] = "partial"
             d["keep_windows"] = good
-            d["reason"] = f"(D자동cut·{len(bad)}개) {d.get('reason', '')}"
+            d["reason"] = f"(C/D자동cut·{len(bad)}개) {d.get('reason', '')}"
             excluded += len(bad)
 
     if excluded or cut_scenes:
-        _log(f"D 노이즈 자동 cut: {excluded}개 윈도우 제외, {cut_scenes}개 씬 전체 cut")
+        _log(f"C/D 발화 자동 cut: {excluded}개 윈도우 제외, {cut_scenes}개 씬 전체 cut")
 
     return decisions
 
@@ -2360,13 +2364,15 @@ Stage 2 비전 분석은 화면(말하는 듯한 자세)만으로 talking을 분
 분류별 처리:
 - **·A** (시청자 대상): 그룹의 모든 W 윈도우를 keep_windows에 포함 — **끝부분만 남기지 X**
 - **·B** (활동 연계 대화): 보통 보존, 활동 영상과 함께 partial keep
-- **·C** (혼잣말/반려동물 대화): **적극 cut** — 강아지 부르기/단순 감탄/혼잣말은 흐름에 기여 안 함
+- **·C** (혼잣말/반려동물 대화): **cut 강제** (후처리에서 자동 제거)
 - **·D** (노이즈/무의미): **cut 강제** (후처리에서 자동 제거)
 
 **핵심**: talking 라벨 씬을 평가할 때 해당 씬에 속한 발화 그룹의 분류를 먼저 확인.
-- C 그룹 발화면 → 윈도우 1~2개만 partial 또는 cut
-- D 그룹 발화면 → cut (후처리에서 자동)
+- C/D 그룹 발화면 → 후처리가 자동 cut. LLM도 비발화 윈도우만 keep
 - A/B 그룹 발화면 → 윈도우 모두 keep_windows
+
+C/D 그룹의 발화 윈도우는 후처리에서 keep_windows에서 강제 제거됩니다.
+씬 전체가 C/D 발화면 cut, 일부면 비발화 윈도우만 partial로 남습니다.
 
 __SPEECH_FLOWS__
 
