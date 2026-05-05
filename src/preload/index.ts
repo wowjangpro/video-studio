@@ -164,8 +164,8 @@ const subtitle = {
     ipcRenderer.invoke('subtitle:select-srt-file'),
   getYoutubeInfo: (url: string): Promise<{ title: string; duration: number; description: string } | null> =>
     ipcRenderer.invoke('subtitle:get-youtube-info', url),
-  translateDescription: (title: string, description: string, lang: string): Promise<{ title: string; description: string } | null> =>
-    ipcRenderer.invoke('subtitle:translate-description', title, description, lang),
+  translateDescription: (title: string, description: string, lang: string, aiEngine?: string): Promise<{ title: string; description: string } | null> =>
+    ipcRenderer.invoke('subtitle:translate-description', title, description, lang, aiEngine),
   startYoutubeDownload: (url: string, savePath: string): Promise<void> =>
     ipcRenderer.invoke('subtitle:start-youtube-download', url, savePath),
   translateSubtitles: (
