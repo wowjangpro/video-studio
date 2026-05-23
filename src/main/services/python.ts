@@ -6,19 +6,21 @@ import { is } from '@electron-toolkit/utils'
 
 export type ModuleName = 'autocut' | 'subtitle' | 'bgm'
 
+// 빌드 앱은 본인 머신의 프로젝트 venv/스크립트를 절대경로로 참조한다.
+// venv는 절대경로 의존성이 있어 .app 내부로 옮기면 깨지기 때문에 패키징하지 않는다.
+const PROJECT_PYTHON_BASE = '/Users/jeniel/Works/video-studio/python'
+
+function getPythonBase(): string {
+  return is.dev ? join(__dirname, '..', '..', 'python') : PROJECT_PYTHON_BASE
+}
+
 function getPythonPath(module: ModuleName): string {
-  if (is.dev) {
-    const venvName = module === 'bgm' ? 'bgm-venv' : 'shared-venv'
-    return join(__dirname, '..', '..', 'python', venvName, 'bin', 'python')
-  }
-  return 'python3'
+  const venvName = module === 'bgm' ? 'bgm-venv' : 'shared-venv'
+  return join(getPythonBase(), venvName, 'bin', 'python')
 }
 
 function getScriptPath(module: ModuleName, script: string): string {
-  if (is.dev) {
-    return join(__dirname, '..', '..', 'python', module, script)
-  }
-  return join(process.resourcesPath, 'python', module, script)
+  return join(getPythonBase(), module, script)
 }
 
 export function runPythonScript(
@@ -31,11 +33,13 @@ export function runPythonScript(
   const pythonPath = getPythonPath(module)
   const scriptPath = getScriptPath(module, script)
 
-  if (is.dev && !existsSync(pythonPath)) {
+  if (!existsSync(pythonPath)) {
     console.error(`[python:${module}] python not found: ${pythonPath}`)
+    onError?.(`Python interpreter not found: ${pythonPath}`)
   }
   if (!existsSync(scriptPath)) {
     console.error(`[python:${module}] script not found: ${scriptPath}`)
+    onError?.(`Script not found: ${scriptPath}`)
   }
 
   const proc = spawn(pythonPath, [scriptPath, ...args], {

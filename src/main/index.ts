@@ -3,6 +3,16 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers, cleanupAllProcesses } from './ipc-handlers'
 
+// Finder에서 더블클릭으로 실행한 .app은 launchd 기본 PATH만 가지므로
+// homebrew 경로를 보강해서 spawn하는 모든 자식 프로세스(ffmpeg/ffprobe/python)가
+// /opt/homebrew/bin 의 바이너리를 찾을 수 있게 한다.
+if (process.platform === 'darwin') {
+  const extras = ['/opt/homebrew/bin', '/usr/local/bin']
+  const current = (process.env.PATH || '').split(':')
+  const merged = [...extras.filter((p) => !current.includes(p)), ...current]
+  process.env.PATH = merged.join(':')
+}
+
 process.on('uncaughtException', (err) => {
   if (err.message.includes('EPIPE')) return
   console.error(err)
