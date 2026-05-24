@@ -37,7 +37,7 @@ def format_srt_label(segment: dict) -> str:
 
 def merge_adjacent_segments(
     segments: list[dict],
-    gap_threshold: float = 3.0,
+    gap_threshold: float = 12.0,
     min_duration: float = 2.0,
 ) -> list[dict]:
     """인접한 KEEP 세그먼트를 병합하고 최소 길이 필터링

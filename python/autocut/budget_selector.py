@@ -160,42 +160,66 @@ def _select_keep_windows(
     scene: dict,
     all_windows: list[dict],
     max_windows: int = 6,
+    chunk_size: int = 2,
 ) -> list[int]:
-    """긴 장면에서 핵심 윈도우만 선택
+    """긴 장면에서 핵심 윈도우만 선택 — 연속 청크 단위
 
-    - 말소리 윈도우 우선
-    - 비말소리: 시작/끝 + 균등 샘플링
+    각 청크는 인접한 chunk_size개 윈도우로 구성(=20~30초 자연스러운 컷).
+    이렇게 골라야 merger가 인접 윈도우를 한 세그먼트로 묶어서 길이가 다양해진다.
+
+    - 말소리 청크 우선
+    - 비말소리: 시작/끝 청크 + 모션이 높은 중간 청크
     """
     wids = scene["window_ids"]
+    if not wids:
+        return []
 
-    speech_wids = [
-        wid for wid in wids
-        if 0 <= wid < len(all_windows) and window_has_speech(all_windows[wid])
-    ]
+    if len(wids) <= max_windows:
+        return list(wids)
 
-    if speech_wids:
-        non_speech = [wid for wid in wids if wid not in set(speech_wids)]
-        remaining = max(0, max_windows - len(speech_wids))
-        if remaining > 0 and non_speech:
-            step = max(1, len(non_speech) // remaining)
-            sampled = non_speech[::step][:remaining]
-            selected = sorted(set(speech_wids) | set(sampled))
-        else:
-            selected = sorted(speech_wids[:max_windows])
+    # chunk_size 단위로 인접 윈도우 묶음(전부 인접하므로 단순 슬라이싱 OK)
+    chunks: list[list[int]] = []
+    for i in range(0, len(wids), chunk_size):
+        chunks.append(wids[i : i + chunk_size])
+
+    target_chunks = max(1, max_windows // chunk_size)
+
+    def chunk_has_speech(chunk: list[int]) -> bool:
+        return any(
+            0 <= wid < len(all_windows) and window_has_speech(all_windows[wid])
+            for wid in chunk
+        )
+
+    def chunk_motion(chunk: list[int]) -> float:
+        motions = [
+            all_windows[wid].get("motion", 0.0)
+            for wid in chunk
+            if 0 <= wid < len(all_windows)
+        ]
+        return max(motions) if motions else 0.0
+
+    speech_chunks = [c for c in chunks if chunk_has_speech(c)]
+
+    if speech_chunks:
+        selected_chunks = speech_chunks[:target_chunks]
+        if len(selected_chunks) < target_chunks:
+            remaining = [c for c in chunks if c not in selected_chunks]
+            remaining.sort(key=chunk_motion, reverse=True)
+            selected_chunks.extend(remaining[: target_chunks - len(selected_chunks)])
     else:
-        if len(wids) <= max_windows:
-            selected = list(wids)
-        else:
-            middle = wids[1:-1]
-            inner_count = max(0, max_windows - 2)
-            if inner_count > 0 and middle:
-                step = max(1, len(middle) // inner_count)
-                inner = middle[::step][:inner_count]
-            else:
-                inner = []
-            selected = sorted(set([wids[0], wids[-1]]) | set(inner))
+        # 비말소리: 시작/끝 + 중간 모션 높은 청크
+        selected_chunks = [chunks[0]]
+        if len(chunks) > 1:
+            selected_chunks.append(chunks[-1])
+        middle = chunks[1:-1] if len(chunks) > 2 else []
+        middle.sort(key=chunk_motion, reverse=True)
+        inner_needed = max(0, target_chunks - len(selected_chunks))
+        selected_chunks.extend(middle[:inner_needed])
 
-    return selected
+    selected: list[int] = []
+    for chunk in selected_chunks:
+        selected.extend(chunk)
+    return sorted(set(selected))
 
 
 # ---------------------------------------------------------------------------

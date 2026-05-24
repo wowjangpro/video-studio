@@ -154,7 +154,7 @@ __KEEP_BIAS__
 
 [
   {"scene": 5, "decision": "cut", "reason": "S04와 같은 요리 대기, 변화 없음"},
-  {"scene": 8, "decision": "partial", "keep_windows": [30,31,48,49], "hint": "crop:48,49", "reason": "3분 요리 중 시작/완성만, 완성 클로즈업 크롭 추천"},
+  {"scene": 8, "decision": "partial", "keep_windows": [30,31,48,49], "hint": "crop:48,49", "reason": "3분 요리 중 시작 청크와 완성 청크 각 20초, 완성 클로즈업 크롭 추천"},
   {"scene": 12, "decision": "cut", "reason": "S11과 동일 활동 반복"},
   ...
 ]
@@ -1066,27 +1066,42 @@ def _force_trim_to_target(
                         trimmed_count += 1
                 continue
 
-            # 일반 보호 씬: cut 금지, 1윈도우 축소
+            # 일반 보호 씬: cut 금지, 2윈도우(20초) 청크로 축소
             if decision == "keep":
                 wids = scene.get("window_ids", [])
-                if len(wids) > 1:
+                if len(wids) > 2:
                     if has_speech:
                         speech_wids = [
                             w for w in wids
                             if 0 <= w < len(all_windows) and window_has_speech(all_windows[w])
                         ]
-                        keep_w = [speech_wids[0]] if speech_wids else [wids[0]]
+                        if speech_wids:
+                            # 발화 시작 윈도우 + 인접 다음 윈도우(있으면)
+                            first = speech_wids[0]
+                            idx = wids.index(first) if first in wids else 0
+                            start_idx = min(idx, len(wids) - 2)
+                            keep_w = wids[start_idx : start_idx + 2]
+                        else:
+                            keep_w = wids[:2]
                     else:
-                        keep_w = [max(wids, key=lambda w: all_windows[w].get("motion", 0.0)
-                                      if 0 <= w < len(all_windows) else 0.0)]
+                        # 모션 가장 높은 윈도우 중심으로 인접 2윈도우
+                        best_idx = max(
+                            range(len(wids)),
+                            key=lambda i: all_windows[wids[i]].get("motion", 0.0)
+                            if 0 <= wids[i] < len(all_windows) else 0.0,
+                        )
+                        start_idx = min(best_idx, len(wids) - 2)
+                        keep_w = wids[start_idx : start_idx + 2]
                     d["decision"] = "partial"
                     d["keep_windows"] = keep_w
                     d["reason"] = f"(강제trim·보호씬축소) {d.get('reason', '')}"
                     trimmed_count += 1
             elif decision == "partial":
                 kw = d.get("keep_windows", [])
-                if len(kw) > 1:
-                    d["keep_windows"] = kw[:1]
+                if len(kw) > 2:
+                    # 인접 청크 보존: 정렬된 keep_windows에서 앞쪽 인접 2윈도우만
+                    kw_sorted = sorted(kw)
+                    d["keep_windows"] = kw_sorted[:2]
                     d["reason"] = f"(강제trim·partial축소) {d.get('reason', '')}"
                     trimmed_count += 1
             continue
@@ -1131,7 +1146,7 @@ def _distribute_activity_clusters(
 
     예: setting_up 씬 5개 (S5~S9 인접) →
         LLM이 S6만 길게 keep, 나머지 cut 했다면 → 흐름 끊김.
-        이런 패턴 발견 시 모든 씬을 각 1윈도우 partial로 균등 분배.
+        이런 패턴 발견 시 모든 씬을 각 인접 2윈도우 청크(20초) partial로 균등 분배.
 
     조건:
       - 시간순 인접한 같은 라벨 씬이 3개 이상
@@ -1212,20 +1227,30 @@ def _distribute_activity_clusters(
             ]
             pool = usable_wids if usable_wids else wids
 
-            # 위치별 윈도우 선택
+            # 위치별 윈도우 선택 (start_wid를 기준으로 인접 2윈도우 청크 = 20초)
             if idx == 0:
                 # 첫 씬: 시작 부분
-                target_wid = pool[0]
+                start_wid = pool[0]
             elif idx == n_cluster - 1:
-                # 마지막 씬: 끝 부분 (활동 완성)
-                target_wid = pool[-1]
+                # 마지막 씬: 끝 부분 (활동 완성) — 청크 끝이 pool 마지막에 오도록 한 칸 앞에서 시작
+                start_wid = pool[-2] if len(pool) >= 2 else pool[-1]
             else:
                 # 중간 씬: 모션 높은 윈도우
-                target_wid = max(
+                start_wid = max(
                     pool,
                     key=lambda w: all_windows[w].get("motion", 0.0)
                     if 0 <= w < len(all_windows) else 0.0,
                 )
+
+            # 인접 2윈도우 청크 구성: wids 안에서 start_wid + 다음 윈도우
+            try:
+                s_idx = wids.index(start_wid)
+            except ValueError:
+                s_idx = 0
+            # 씬 끝이면 한 칸 앞으로 당겨서 2개 확보
+            if s_idx >= len(wids) - 1 and len(wids) >= 2:
+                s_idx = len(wids) - 2
+            chunk_wids = wids[s_idx : s_idx + 2] if len(wids) >= 2 else [wids[0]]
 
             if d is None:
                 d = {"scene": s["id"]}
@@ -1234,24 +1259,24 @@ def _distribute_activity_clusters(
 
             if d.get("decision") == "cut":
                 d["decision"] = "partial"
-                d["keep_windows"] = [target_wid]
+                d["keep_windows"] = chunk_wids
                 pos_label = "시작" if idx == 0 else ("완성" if idx == n_cluster - 1 else "대표")
                 d["reason"] = f"(클러스터분배·{label}·{pos_label}) 흐름 유지 위해 복원"
-            elif d.get("decision") == "keep" and len(wids) > 1:
+            elif d.get("decision") == "keep" and len(wids) > 2:
                 d["decision"] = "partial"
-                d["keep_windows"] = [target_wid]
+                d["keep_windows"] = chunk_wids
                 pos_label = "시작" if idx == 0 else ("완성" if idx == n_cluster - 1 else "대표")
                 d["reason"] = f"(클러스터분배·{label}·{pos_label}) 균등 분배 축소"
             elif d.get("decision") == "partial":
                 kw = d.get("keep_windows", [])
-                # 첫/마지막 씬은 위치 윈도우로 교체, 중간은 기존 keep 유지하되 1개로 축소
+                # 첫/마지막 씬은 위치 청크로 교체, 중간은 기존 keep 유지하되 2윈도우 청크로 축소
                 if idx == 0 or idx == n_cluster - 1:
-                    d["keep_windows"] = [target_wid]
+                    d["keep_windows"] = chunk_wids
                     pos_label = "시작" if idx == 0 else "완성"
-                    d["reason"] = f"(클러스터분배·{label}·{pos_label}) 위치 윈도우로 교체"
-                elif len(kw) > 1:
-                    d["keep_windows"] = kw[:1]
-                    d["reason"] = f"(클러스터분배·{label}·대표) 1윈도우로 축소"
+                    d["reason"] = f"(클러스터분배·{label}·{pos_label}) 위치 청크로 교체"
+                elif len(kw) > 2:
+                    d["keep_windows"] = chunk_wids
+                    d["reason"] = f"(클러스터분배·{label}·대표) 2윈도우 청크로 축소"
 
         distributed_groups += 1
 
@@ -2311,11 +2336,15 @@ CLAUDE_EDITING_PROMPT = """당신은 캠핑 브이로그 편집자입니다.
 도착 → 셋업 → 요리 → 식사 → 불멍 → 취침 → 아침 → 철수.
 이 흐름이 끊기지 않게 편집하세요. **흐름 > 말**.
 
-### 2. 짧은 장면 + 잦은 전환 + 촬영 영상 최대 활용
-- 평균 컷 **9초 ± 3초** (5초 미만도 적극)
-- 같은 화면이 길게 이어지면 시청자가 빠져나감 → partial로 자주 끊기
+### 2. 다양한 컷 길이 + 잦은 전환 + 촬영 영상 최대 활용
+- **컷 길이는 내용에 맞춰 자유롭게**: 짧은 컷(5~15초)과 긴 컷(20~60초)을 섞으세요
+- 평균 15~25초가 자연스러움 — **모든 컷을 짧게 자르면 단조로움**
+  · 행동/풍경/B-roll → 10~20초
+  · 설명/내레이션/대화 → 의미 단위로 20~60초 (자르면 어색)
+  · 임팩트 순간(완성, 리액션) → 5~10초
+- 같은 화면이 길게 이어지면 시청자가 빠져나감 → partial로 핵심 구간만
 - **촬영한 영상은 가능하면 모두 짧게라도 사용** (통째 cut 최소화)
-- 한 영상에서 여러 짧은 컷을 골라도 OK (사용자 패턴: 한 영상에서 1~9개 컷)
+- 한 영상에서 여러 컷을 골라도 OK (사용자 패턴: 한 영상에서 1~9개 컷)
 
 ### 3. 주제 설명/내레이션 말은 흐름 보호 ⭐⭐⭐
 **발화 내용(💬)을 읽고 "누구한테 하는 말인지"를 먼저 판단하세요.**
@@ -2399,16 +2428,18 @@ __DURATION_GUIDE__
 
 모든 씬에 대해 다음 셋 중 하나로 결정하세요:
 
-- **keep**: 씬 전체 유지. 단 **씬 길이가 윈도우 1개(10초) 이하**일 때만 사용.
-- **partial**: 핵심 윈도우만 골라 유지 (나머지 자동 삭제). **윈도우 2개 이상 씬의 기본값**.
+- **keep**: 씬 전체 유지. 의미 단위로 한 호흡에 봐야 하는 짧은~중간 씬(60초 이내)에 적합.
+- **partial**: 핵심 윈도우만 골라 유지 (나머지 자동 삭제). **긴 씬의 기본값**.
 - **cut**: 씬 전체 삭제.
 
 ## 결정 규칙
 
-### 1. 컷 길이 목표 (사용자 실제 편집 통계)
-- **평균 컷 9초 ± 3초**, 절반은 5초 이하
-- partial keep_windows는 보통 1~2개만 (한 윈도우=10초)
-- **인접 윈도우 연속 keep 금지** — `[0, 1]`은 한 컷이 20초가 됨. `[0, 3]`처럼 점프
+### 1. 컷 길이 목표 — 다양한 리듬
+- **평균 컷 15~25초**가 가장 자연스러움. 모든 컷을 짧게 자르면 단조로움.
+- 컷 길이 분포 권장: 짧은 컷(5~15초) 1/3, 중간 컷(15~30초) 1/2, 긴 컷(30~60초) 1/6
+- partial keep_windows는 **연속 인접 윈도우를 묶는 것이 자연**: `[3, 4]`(20초) 또는 `[3, 4, 5]`(30초)
+- 의미 단위(완성된 설명 한 호흡, 활동 한 단락)는 끊지 말고 연속으로 묶기
+- 너무 잘게 자른 점프 컷(`[0, 3, 6]`)은 흐름이 끊기니 자제 — 연속 청크를 선호
 
 ### 2. 말소리(★) 씬은 무조건 keep이 아님 ⚠️
 **말소리가 있다고 무조건 남기지 마세요.** 발화의 내용을 판단하세요:
@@ -2429,12 +2460,12 @@ __DURATION_GUIDE__
 → 말소리 씬도 **흐름에 기여 안 하면 과감히 cut**. 말 < 흐름.
 
 ### 3. 비말소리 씬 (★ 없음)
-- 윈도우 1개 → keep
-- 윈도우 2개 이상 → **거의 모두 partial** — keep_windows 1~2개만
-- 기본 패턴 (한 컷 = 1윈도우, 평균 9초 목표):
-  - 2~3윈도우 씬 → `keep_windows: [0]` (10초 컷)
-  - 4~6윈도우 씬 → `keep_windows: [0, 3]` 또는 `[2]` 만
-  - 7+윈도우 씬 → `keep_windows: [0, 4]` 또는 핵심 1개
+- 윈도우 1~3개 → keep (10~30초 자연스러움)
+- 윈도우 4개 이상 → partial — 핵심 **연속 청크**를 선택
+- 기본 패턴 (한 청크 = 인접 2~3 윈도우, 20~30초 컷):
+  - 4~6윈도우 씬 → `keep_windows: [0, 1]` 또는 `[2, 3]` (한 청크 20초)
+  - 7~10윈도우 씬 → `keep_windows: [0, 1, 5, 6]` (시작 청크 + 중간 청크)
+  - 10+윈도우 씬 → `keep_windows: [0, 1, 4, 5, 8, 9]` (시작/중간/끝 청크)
 
 ### 4. CUT 대상 (적극) — 의미 없는 화면 적극 제거
 **핵심 원칙: 촬영자/주인공의 행동이 있는 장면 우선. 사물만 보이는 정지 화면은 불필요.**
@@ -2457,10 +2488,10 @@ __DURATION_GUIDE__
 
 ### 5-2. ⭐ 활동 클러스터는 균등 분배 (매우 중요)
 같은 라벨이 **시간순 인접해 여러 씬에 연속**해 있으면 (예: 셋업이 영상 5개에 걸쳐 진행),
-**모든 씬에서 짧게 1윈도우씩** 가져오세요. 한쪽만 길게 keep + 나머지 통째 cut은 금지.
+**모든 씬에서 짧은 청크(인접 2윈도우 = 20초)씩** 가져오세요. 한쪽만 길게 keep + 나머지 통째 cut은 금지.
 
 ❌ 나쁜 예: S5 setting_up keep(전체) + S6, S7, S8 cut → 흐름 끊김, 시청자 지루
-✅ 좋은 예: S5, S6, S7, S8 각 partial([윈도우 1개씩]) → 짧게짧게 자연스러운 흐름
+✅ 좋은 예: S5, S6, S7, S8 각 partial([인접 2윈도우 청크씩]) → 자연스러운 흐름
 
 특히 **텐트/타프 셋업, 요리 과정, 불멍 시퀀스**는 시간 흐름이 있는 활동이라 분배 필수.
 
@@ -2572,13 +2603,13 @@ REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 전체 길이가 목표를 크
 
 ## 적극적 감축 전략 — 모두 적용
 
-- **반복 활동**: 같은 라벨/내용이 2개 이상이면 모션 가장 좋은 1개만 남기고 나머지 모두 cut
-- **긴 partial을 더 짧게**: 현재 partial keep_windows가 2개+면 1개로 줄임
-- **말소리 씬 partial**: 30초+ 말소리 씬도 핵심 발화 윈도우 1~2개만 keep
-- **인접 비슷한 씬**: 시간 흐름상 가까이 있는 같은 활동은 1개만 keep
+- **반복 활동**: 같은 라벨/내용이 2개 이상이면 모션 가장 좋은 1~2개만 남기고 나머지 cut
+- **긴 partial을 청크 단위로**: 현재 partial keep_windows가 4개+면 인접 2개 청크로 줄임 (점프 컷 금지)
+- **말소리 씬 partial**: 60초+ 말소리 씬도 핵심 발화 청크(인접 2~3윈도우)만 keep
+- **인접 비슷한 씬**: 시간 흐름상 가까이 있는 같은 활동은 1~2개만 keep
 - **B-roll/풍경**: 핵심 1~2개만 남기고 cut
 - **저모션/정체 장면**: 모두 cut
-- 평균 컷 길이 9초 ± 3초 목표 (사용자 실제 편집 통계)
+- 평균 컷 15~25초 목표 (다양한 리듬, 단조롭지 않게)
 
 ## 현재 KEEP 장면 목록 (이 중에서 골라서 줄이세요)
 
@@ -2600,7 +2631,7 @@ REEDIT_PROMPT_CLAUDE = """이전 편집 결과의 전체 길이가 목표를 크
 === JSON ===
 {{"reasoning": "...", "decisions": [
   {{"scene": 5, "decision": "cut", "reason": "S04와 동일한 풍경 반복"}},
-  {{"scene": 12, "decision": "partial", "keep_windows": [50], "reason": "긴 셋업을 1윈도우로 축소"}}
+  {{"scene": 12, "decision": "partial", "keep_windows": [50, 51], "reason": "긴 셋업을 인접 2윈도우(20초) 청크로 축소"}}
 ]}}
 ```
 
@@ -2678,8 +2709,8 @@ FLOW_ANALYSIS_PROMPT = """당신은 캠핑/아웃도어 브이로그 편집자�
 1. **시간순 행동 흐름이 가장 중요** — 브이로그의 본질은 주인공의 시간순 활동
    (도착→셋업→요리→식사→불멍→취침→아침→철수). 흐름이 본체.
 
-2. **짧은 장면 + 잦은 전환 + 촬영 영상 최대 활용** — 평균 9초 컷, 영상은 가능하면
-   모두 짧게라도 사용. 통째 cut 최소화.
+2. **다양한 컷 길이 + 잦은 전환 + 촬영 영상 최대 활용** — 평균 15~25초, 짧은 컷/긴 컷
+   섞기. 영상은 가능하면 모두 사용. 통째 cut 최소화.
 
 3. **주제 설명/내레이션 말은 흐름 보호** — 장비 설명, 요리 해설, 감상, 스토리텔링 같은
    의미 있는 발화는 끊기지 않게. 의성어/혼잣말은 cut 가능.
@@ -2879,12 +2910,12 @@ def run_narrative_editing_claude(
                 f"**완성본 전체 길이가 약 {target_minutes}분이 되도록** 편집하세요. "
                 f"(말소리/비말소리 모두 포함한 합. ± 2분 이내)\n\n"
                 f"이 목표를 맞추는 방법:\n"
-                f"- 모든 씬을 PARTIAL 검토 (keep_windows 1~2개로 짧게)\n"
+                f"- 긴 씬은 PARTIAL 검토 (keep_windows는 **인접 2~3윈도우 청크** 1~2개)\n"
                 f"- **말소리(★) 씬도 길면 partial** — 말 사이 여백, 무의미 발화, 변화 없는 화면 cut\n"
-                f"- 같은 라벨 반복 씬은 **모션 가장 높은 1개만** 남기고 나머지 CUT\n"
+                f"- 같은 라벨 반복 씬은 **모션 가장 높은 1~2개만** 남기고 나머지 CUT\n"
                 f"- 셋업/요리/불멍/풍경도 **각 활동 1~2회만** (반복 금지)\n"
                 f"- **활용도 낮은 영상은 통째로 cut OK** (사용자 패턴: 영상 30%는 통째 미사용)\n"
-                f"- 평균 컷 길이 **9초 ± 3초** 목표 (사용자 실제 편집 통계)\n"
+                f"- 평균 컷 길이 **15~25초** 목표 (짧은 컷/긴 컷 섞기, 단조롭지 않게)\n"
             )
             _log(f"목표 시간 설정: 전체 합 {target_minutes}분")
         else:
@@ -2905,7 +2936,7 @@ def run_narrative_editing_claude(
                 f"- 가치 없는 씬은 길이 무관 cut\n"
                 f"- 가치 있는 씬은 의미 단위로 keep (끝부분만 남기지 X)\n"
                 f"- 같은 활동 반복은 가장 좋은 1~2개만\n"
-                f"- 평균 컷 길이 9초 ± 3초 (짧게 자주 끊기)\n"
+                f"- 평균 컷 길이 15~25초 (짧은 컷/긴 컷 섞어 다양한 리듬)\n"
             )
         comment_section = ""
         if editing_comment:
