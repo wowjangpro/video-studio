@@ -634,11 +634,14 @@ export function registerSubtitleIpc(): void {
       _event,
       title: string,
       description: string,
-      lang: string
+      lang: string,
+      aiEngine?: string
     ) => {
       try {
+        const useClaude = aiEngine === 'claude' || !aiEngine  // Claude를 기본값으로 (Ollama 모델 부재)
+        const scriptName = useClaude ? 'translate_text_claude.py' : 'translate_text.py'
         return await new Promise<{ title: string; description: string } | null>((resolve, reject) => {
-          translateTextProcess = runPythonScript('subtitle', 'translate_text.py', [], (data) => {
+          translateTextProcess = runPythonScript('subtitle', scriptName, [], (data) => {
             const status = data.status as string
             if (status === 'done') {
               resolve({ title: data.title as string, description: data.description as string })
