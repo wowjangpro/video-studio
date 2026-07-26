@@ -16,7 +16,7 @@ LANG_NAMES = {
 def call_claude(prompt: str, timeout: int = 300) -> str:
     cmd = [
         "claude", "-p",
-        "--model", "claude-opus-4-7",
+        "--model", "claude-opus-5",
         "--output-format", "json",
         "--no-session-persistence",
         "--dangerously-skip-permissions",

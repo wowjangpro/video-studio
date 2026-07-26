@@ -1587,7 +1587,7 @@ def _classify_speech_flows_claude(
         progress_callback("editing", 82, f"발화 그룹 {len(flows)}개 분류 중 (Claude)...")
 
     _log(f"발화 그룹 분류 호출... ({len(flows)}개, 프롬프트 {len(prompt)}자)")
-    response = call_claude_text(prompt, model="claude-opus-4-7", timeout=600)
+    response = call_claude_text(prompt, model="claude-opus-5", timeout=600)
 
     if not response:
         _log("발화 분류: 응답 없음, 모두 'A'로 보수 처리")
@@ -2806,7 +2806,7 @@ def analyze_overall_flow_claude(
         progress_callback("editing", 81, "전체 영상 흐름 분석 중 (Claude)...")
 
     _log(f"전체 흐름 분석 호출... (프롬프트 {len(prompt)}자)")
-    response = call_claude_text(prompt, model="claude-opus-4-7", timeout=900)
+    response = call_claude_text(prompt, model="claude-opus-5", timeout=900)
     if response:
         _log(f"=== 전체 흐름 분석 결과 ({len(response)}자) ===\n{response[:2000]}\n=== 분석 끝 ===")
     else:
@@ -2968,7 +2968,7 @@ def run_narrative_editing_claude(
 
         _log(f"Claude 편집 호출 시작... (프롬프트 {len(prompt)}자, {len(scenes)}개 장면)")
         _log(f"=== Claude 프롬프트 ===\n{prompt}\n=== 프롬프트 끝 ===")
-        response = call_claude_text(prompt, model="claude-opus-4-7", timeout=1800)
+        response = call_claude_text(prompt, model="claude-opus-5", timeout=1800)
         _log(f"=== Claude 응답 ({len(response)}자) ===\n{response}\n=== 응답 끝 ===")
     finally:
         # 임시 파일 정리
@@ -3049,7 +3049,7 @@ def run_narrative_editing_claude(
         )
 
         _log(f"Claude 재편집 호출... (프롬프트 {len(reedit_prompt)}자)")
-        reedit_response = call_claude_text(reedit_prompt, model="claude-opus-4-7", timeout=1800)
+        reedit_response = call_claude_text(reedit_prompt, model="claude-opus-5", timeout=1800)
 
         if not reedit_response:
             _log("Claude 재편집: 응답 없음, 중단")

@@ -317,7 +317,7 @@ def tag_windows_batch_claude(
                 pct = int((batch_idx / total_batches) * 100)
                 progress_callback(f"Claude 비전 분석 중... ({batch_idx+1}/{total_batches})", pct)
 
-            response = call_claude_vision(prompt, batch_paths, model="claude-opus-4-7", timeout=180)
+            response = call_claude_vision(prompt, batch_paths, model="claude-opus-5", timeout=180)
 
             if not response:
                 _log(f"Claude 배치 {batch_idx+1} 응답 없음")
