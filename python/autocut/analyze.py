@@ -22,7 +22,7 @@ from stage2 import tag_window_context, tag_windows_batch_claude
 from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary, window_has_speech
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
-from edl_export import generate_edl
+from edl_export import generate_edl, resolve_edl_rate
 from fcpxml_export import generate_fcpxml
 from silence_trim import trim_silence_in_segments
 
@@ -292,8 +292,10 @@ def get_video_fps(path: str) -> float:
         return 0.0
 
 
-def get_video_start_tc_seconds(path: str) -> float:
+def get_video_start_tc_seconds(path: str, fps: float | None = None) -> float:
     """영상 metadata의 timecode를 초 단위로 반환.
+
+    fps를 넘기면 재프로브 없이 재사용한다(스캔 시 파일당 ffprobe 호출 절감).
 
     카메라 영상의 timecode 위치는 다양:
       - 비디오 스트림 tags.timecode
@@ -329,7 +331,9 @@ def get_video_start_tc_seconds(path: str) -> float:
         if len(parts) != 4:
             return 0.0
         h, m, s, f = (int(x) for x in parts)
-        fps = get_video_fps(path) or 24.0
+        if fps is None:
+            fps = get_video_fps(path)
+        fps = fps or 24.0
         return h * 3600 + m * 60 + s + f / fps
     except Exception:
         return 0.0
@@ -359,12 +363,14 @@ def scan_video_files(folder_path: str) -> list[dict]:
             full_path = os.path.join(folder_path, name)
             duration = get_video_duration(full_path)
             if duration > 0:
-                tc_seconds = get_video_start_tc_seconds(full_path)
+                fps = get_video_fps(full_path)
+                tc_seconds = get_video_start_tc_seconds(full_path, fps)
                 files.append({
                     "path": full_path,
                     "name": name,
                     "duration": duration,
                     "tc_seconds": tc_seconds,
+                    "fps": fps,
                 })
     return files
 
@@ -527,9 +533,11 @@ def main():
                 srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
             write_srt(validated, srt_path)
 
-            # EDL 생성 (24fps NDF 고정)
+            # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
             edl_path = srt_path.replace(".srt", ".edl")
-            edl_fps = 24.0  # EDL은 항상 24fps NDF (다빈치 timeline 24fps와 매칭)
+            if not any(f.get("fps") for f in files):
+                log("경고: 영상 fps 감지 실패 — EDL을 24fps로 fallback (다빈치 offline 위험, ffprobe 확인 필요)")
+            edl_fps = resolve_edl_rate(files, 24.0)
             edl_content = generate_edl(validated, files, fps=edl_fps)
             if edl_content:
                 with open(edl_path, "w", encoding="utf-8") as ef:
@@ -978,9 +986,11 @@ def main():
             srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
         write_srt(validated, srt_path)
 
-        # EDL 생성 (24fps NDF 고정)
+        # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
         edl_path = srt_path.replace(".srt", ".edl")
-        edl_fps = 24.0  # EDL은 항상 24fps NDF (다빈치 timeline 24fps와 매칭)
+        if not any(f.get("fps") for f in files):
+            log("경고: 영상 fps 감지 실패 — EDL을 24fps로 fallback (다빈치 offline 위험, ffprobe 확인 필요)")
+        edl_fps = resolve_edl_rate(files, 24.0)
         edl_content = generate_edl(validated, files, fps=edl_fps)
         if edl_content:
             with open(edl_path, "w", encoding="utf-8") as ef:

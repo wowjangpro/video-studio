@@ -5,6 +5,7 @@ DaVinci Resolve에서 File > Import > EDL로 불러와
 """
 
 import bisect
+from collections import Counter
 
 
 def _resolve_fps(fps: float) -> tuple[int, bool, str]:
@@ -12,14 +13,32 @@ def _resolve_fps(fps: float) -> tuple[int, bool, str]:
 
     NTSC 계열(29.97, 59.94, 23.976)은 frame count base를 정수로 사용한다.
     29.97/59.94는 drop frame, 23.976은 non-drop으로 처리.
+
+    tolerance는 0.01로 좁게 잡는다. 0.05로 넓으면 정확히 30.000fps 영상
+    (일부 폰/화면녹화)이 29.97(|30-29.97|=0.03)로 오분류되어 drop frame이
+    적용되고, 매 분 2프레임 drop 때문에 source TC가 어긋난다.
     """
-    if abs(fps - 23.976) < 0.05 or abs(fps - 24000 / 1001) < 0.05:
+    if abs(fps - 23.976) < 0.01 or abs(fps - 24000 / 1001) < 0.01:
         return 24, False, "NON-DROP FRAME"
-    if abs(fps - 29.97) < 0.05 or abs(fps - 30000 / 1001) < 0.05:
+    if abs(fps - 29.97) < 0.01 or abs(fps - 30000 / 1001) < 0.01:
         return 30, True, "DROP FRAME"
-    if abs(fps - 59.94) < 0.05 or abs(fps - 60000 / 1001) < 0.05:
+    if abs(fps - 59.94) < 0.01 or abs(fps - 60000 / 1001) < 0.01:
         return 60, True, "DROP FRAME"
     return int(round(fps)), False, "NON-DROP FRAME"
+
+
+def resolve_edl_rate(files: list[dict], fallback: float = 24.0) -> float:
+    """파일 목록에서 EDL 전체에 적용할 단일 레이트를 결정.
+
+    CMX 3600 EDL은 FCM 헤더가 하나뿐이라 timeline 레이트가 단일해야 한다.
+    파일들의 실제 fps 중 최빈값을 사용하고(첫 파일이 우연히 다른 레이트여도
+    전체가 휘둘리지 않도록), fps를 못 읽은(0.0) 파일은 제외한다.
+    유효 fps가 하나도 없으면 fallback을 반환한다(감지 실패).
+    """
+    rates = [round(f["fps"], 3) for f in files if f.get("fps")]
+    if not rates:
+        return fallback
+    return Counter(rates).most_common(1)[0][0]
 
 
 def seconds_to_timecode(seconds: float, fps: int = 24, drop_frame: bool = False) -> str:
@@ -38,7 +57,7 @@ def seconds_to_timecode(seconds: float, fps: int = 24, drop_frame: bool = False)
         total_seconds = total_frames // fps
         ss = total_seconds % 60
         mm = (total_seconds // 60) % 60
-        hh = total_seconds // 3600
+        hh = (total_seconds // 3600) % 24  # drop-frame 경로와 동일하게 24h wrap
         return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
 
     # SMPTE drop frame (29.97 = 30 base, 59.94 = 60 base)
@@ -74,9 +93,10 @@ def generate_edl(
 
     Args:
         segments: [{"globalStart": float, "globalEnd": float, "label": str, ...}]
-        files: [{"name": str, "duration": float, "offset": float, "path": str}]
+        files: [{"name", "duration", "offset", "path", "fps", "tc_seconds"}]
         title: EDL 타이틀
-        fps: 프레임레이트(실수). 29.97 → drop frame, 23.976/24/25/30/60 → NDF
+        fps: EDL 레이트 fallback. 파일에 `fps`가 있으면 그 값을 우선 사용
+             (29.97 → drop frame, 23.976/24/25/30/60 → NDF)
 
     Returns:
         EDL 문자열
@@ -88,16 +108,35 @@ def generate_edl(
         나머지가 offline으로 표시되는 문제를 방지한다.
         `* SOURCE FILE:` 코멘트로 절대 경로를 함께 제공하여 다빈치
         auto-conform이 정확한 파일을 찾을 수 있게 한다.
+
+        source TC는 미디어의 임베디드 시작 타임코드(`tc_seconds`)를 기준으로
+        계산한다. 카메라가 time-of-day TC(예: 01:01:43)를 기록한 영상을
+        0:00:00 기준으로 내보내면 다빈치가 존재하지 않는 타임코드를 찾게 되어
+        offline 처리되므로, 미디어의 실제 TC에 맞춰야 한다.
+
+        EDL 레이트는 `resolve_edl_rate`로 결정한 단일 값이며 source·record TC와
+        FCM 헤더가 모두 이 레이트를 공유한다(CMX 3600은 단일 FCM).
+
+        한계: `tc_seconds`가 drop-frame TC를 실시간 초로 근사 파싱하므로
+        source in/out이 최대 1프레임 이르게 나올 수 있다(offline 유발 X, 편집
+        정밀도만 ±1프레임). 100fps 이상 초고속 촬영은 CMX 3600의 2자리 프레임
+        필드로 표현 불가하므로 지원하지 않는다.
     """
     if not segments or not files:
         return ""
 
     # 다빈치 리졸브 timeline의 default starting TC가 01:00:00:00이므로
     # record TC도 같은 오프셋으로 시작하면 conform이 자연스럽게 맞는다.
-    # (source TC는 영상 metadata TC와 맞추기 위해 00:00:00 시작 유지)
+    # (source TC는 영상 metadata TC + 파일 내 오프셋으로 계산 — 아래 참조)
     RECORD_TC_OFFSET_SEC = 3600
 
-    fps_int, drop_frame, fcm = _resolve_fps(fps)
+    # EDL 전체 레이트: 파일들의 실제 fps 최빈값(없으면 fps 인자 fallback).
+    # CMX 3600은 FCM 헤더가 하나뿐이므로 source·record TC 모두 이 단일
+    # 레이트로 계산한다. 파일마다 drop/non-drop을 섞으면 FCM 헤더와
+    # 모순되는 TC(예: NON-DROP 헤더 아래 ';' source TC)가 생겨 다빈치가
+    # 오독하거나 offline 처리한다.
+    edl_rate = resolve_edl_rate(files, fps)
+    fps_int, drop_frame, fcm = _resolve_fps(edl_rate)
 
     # 파일별 누적 오프셋 배열 (bisect용)
     file_offsets = [f["offset"] for f in files]
@@ -138,11 +177,14 @@ def generate_edl(
             if clip_end <= clip_start:
                 continue
 
-            # 로컬 타임코드 (소스 파일 내 위치, 0:00:00 시작 — 다빈치 metadata TC 매칭)
+            # 소스 타임코드 = 미디어의 임베디드 시작 TC + 파일 내 오프셋.
+            # EDL 단일 레이트(fps_int/drop_frame)로 계산 → FCM 헤더와 항상 일치.
+            # (임베디드 TC가 없는 파일은 tc0=0 → 기존 0-based 동작 유지)
             local_start = clip_start - file_offset
             local_end = clip_end - file_offset
-            src_in = seconds_to_timecode(local_start, fps_int, drop_frame)
-            src_out = seconds_to_timecode(local_end, fps_int, drop_frame)
+            tc0 = f.get("tc_seconds") or 0.0
+            src_in = seconds_to_timecode(tc0 + local_start, fps_int, drop_frame)
+            src_out = seconds_to_timecode(tc0 + local_end, fps_int, drop_frame)
 
             # 레코드 타임코드 (타임라인상 위치, 01:00:00 시작 — 다빈치 default 매칭)
             rec_in = seconds_to_timecode(RECORD_TC_OFFSET_SEC + record_offset, fps_int, drop_frame)
