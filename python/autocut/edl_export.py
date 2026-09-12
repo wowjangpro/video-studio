@@ -13,6 +13,11 @@ import os
 from collections import Counter
 
 
+# 타임라인에서 첫 클립이 시작할 record 타임코드(HH:MM:SS). 다빈치 프로젝트의
+# 타임라인 시작 TC와 맞아야 앞쪽에 빈 구간이 생기지 않는다.
+RECORD_START_TC = "00:00:00"
+
+
 def resolve_tc_base(fps: float) -> tuple[int, float]:
     """실수 fps → (타임코드 base 정수 fps, 실제 fps)
 
@@ -29,10 +34,13 @@ def resolve_tc_base(fps: float) -> tuple[int, float]:
     # NTSC 계열은 예외 없이 (정수 base) × 1000/1001 이다. 24/30/60만 테이블로
     # 두면 47.952(48000/1001)·119.88(120000/1001) 같은 레이트가 정수로 떨어져
     # 0.1%씩 어긋난다 — time-of-day TC에서는 이게 그대로 offline이 된다.
-    # 상한을 두지 않으면 절대 허용오차(0.01) 때문에 1000의 배수 부근이 전부
-    # NTSC로 잡힌다(1000.0 → base 1001). NTSC 계열은 120을 넘지 않는다.
+    # 허용오차가 절대값(0.01)이라 상·하한이 모두 필요하다. 상한이 없으면
+    # 1000의 배수 부근이 NTSC로 잡히고(1000.0 → base 1001), 하한이 없으면
+    # 저레이트 정수가 전부 NTSC가 된다(10fps → actual 9.99 로 0.1% 어긋나
+    # 타임랩스 소스의 source TC가 시간당 3.6초씩 밀린다).
+    # 실재하는 NTSC 계열의 base는 24/30/48/60/120뿐이다.
     ntsc_base = int(round(fps * 1001 / 1000))
-    if 0 < ntsc_base <= 120 and abs(fps - ntsc_base * 1000 / 1001) < 0.01:
+    if 24 <= ntsc_base <= 120 and abs(fps - ntsc_base * 1000 / 1001) < 0.01:
         return ntsc_base, ntsc_base * 1000 / 1001
     base = int(round(fps))
     return base, float(base)
@@ -211,6 +219,23 @@ def assign_reel_names(files: list[dict]) -> list[str]:
     return reels
 
 
+def track_code(audio_channels: int) -> str:
+    """오디오 채널 수 → CMX 3600 트랙 코드
+
+    `V`는 비디오 전용이라 그대로 내보내면 다빈치에 영상만 들어오고 소리가
+    빠진다. 표준 코드는 다음과 같다.
+
+      V     비디오만
+      B     비디오 + 오디오 1채널
+      AA/V  비디오 + 오디오 2채널(스테레오)
+    """
+    if audio_channels >= 2:
+        return "AA/V"
+    if audio_channels == 1:
+        return "B"
+    return "V"
+
+
 def generate_edl(
     segments: list[dict],
     files: list[dict],
@@ -261,12 +286,14 @@ def generate_edl(
     drop_frame = resolve_edl_drop_frame(files, fps_int, actual_fps)
     fcm = "DROP FRAME" if drop_frame else "NON-DROP FRAME"
 
-    # 다빈치 타임라인의 default starting TC가 01:00:00:00이므로 record TC도
-    # 같은 지점에서 시작한다. 초가 아니라 TC 라벨을 프레임으로 되돌려
-    # 잡아야 한다. 3600초를 29.97로 환산하면 00:59:56:12가 되고,
-    # 3600*fps_int(=108000)는 DF에서 01:00:03;18이 된다(DF 정각은 107892).
+    # 첫 클립이 놓일 record TC. 다빈치는 EDL의 record TC를 타임라인의 절대
+    # TC로 해석하므로, 타임라인 시작 TC와 다르면 그 차이만큼 앞이 빈다.
+    # (타임라인이 00:00:00:00 시작인데 01:00:00:00으로 내보내면 앞 1시간이
+    #  통째로 갭이 된다 — 실제로 관측된 증상이다.)
+    # 타임라인을 01:00:00:00에서 시작하는 프로젝트에 맞추려면 이 상수만
+    # "01:00:00" 으로 바꾸면 된다.
     record_start_frame = timecode_to_frames(
-        "01:00:00;00" if drop_frame else "01:00:00:00", fps_int
+        RECORD_START_TC + (";00" if drop_frame else ":00"), fps_int
     )[0]
 
     # 파일별 누적 오프셋 배열 (bisect용)
@@ -328,8 +355,11 @@ def generate_edl(
 
             reel = file_reels[fi]
 
+            # 트랙 코드는 파일별 오디오 구성에 맞춘다(키가 없으면 스테레오로 간주).
+            ch = f.get("audio_channels")
+            track = track_code(2 if ch is None else ch)
             lines.append(
-                f"{event_num:03d}  {reel}  V     C        "
+                f"{event_num:03d}  {reel}  {track:<6}C        "
                 f"{src_in} {src_out} {rec_in} {rec_out}"
             )
             # 전체 파일명(확장자 제외) — 다빈치가 8자를 넘는 reel name을

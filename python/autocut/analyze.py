@@ -23,7 +23,7 @@ from scene_detector import cross_validate_all, group_windows_to_scenes, filter_n
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import (generate_edl, resolve_edl_rate, resolve_tc_base,
-                        timecode_to_frames, assign_reel_names)
+                        timecode_to_frames, assign_reel_names, RECORD_START_TC)
 from fcpxml_export import generate_fcpxml
 from silence_trim import trim_silence_in_segments
 
@@ -312,6 +312,25 @@ def get_video_fps(path: str) -> float:
         return 0.0
 
 
+def get_audio_channels(path: str) -> int:
+    """오디오 채널 수 (0이면 오디오 없음)
+
+    EDL 트랙 코드를 정하는 데 쓴다. CMX 3600은 비디오/오디오 트랙을 이벤트
+    라인에서 지정하는데, 기본값인 `V`로 내보내면 영상만 편집되고 소리가
+    따라오지 않는다.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+             "-show_entries", "stream=channels", "-of", "json", path],
+            capture_output=True, text=True,
+        )
+        streams = json.loads(result.stdout).get("streams", [])
+        return int(streams[0].get("channels") or 0) if streams else 0
+    except Exception:
+        return 0
+
+
 def get_video_start_tc(path: str, fps: float | None = None) -> tuple[float, bool | None]:
     """영상 metadata의 시작 타임코드 → (실시간 초, drop frame 여부)
 
@@ -426,9 +445,12 @@ def warn_edl_risks(files: list[dict]):
     # 인덱스 접미사로 유일화된다(안 그러면 다빈치가 구분하지 못해 잘못된 클립에
     # conform 된다). 유일화된 reel은 실제 파일명과 다르므로, 매칭은
     # * FROM CLIP NAME: 의 전체 파일명이 담당한다.
+    # reel 이 실제 파일명과 "완전히" 같아야 다빈치의 Source clip file name
+    # 매칭이 성립한다. startswith 로 보면 8자 초과 파일명(잘린 reel 이 항상
+    # 접두사)이 전부 통과해버려, 정작 가장 흔한 불일치가 경고되지 않는다.
     reels = assign_reel_names(files)
     renamed = sum(1 for f, r in zip(files, reels)
-                  if not os.path.splitext(f["name"])[0].upper().startswith(r.strip()))
+                  if r.strip() != os.path.splitext(f["name"])[0].upper())
     if renamed:
         log(f"안내: reel name이 실제 파일명과 다른 파일 {renamed}/{len(files)}개 "
             f"(8자 초과·중복·비ASCII 문자 때문) — "
@@ -441,7 +463,8 @@ def scan_video_files(folder_path: str) -> list[dict]:
     """폴더 내 영상 파일 검색 및 시간순 정렬
 
     각 파일에 metadata timecode(`tc_seconds`)와 drop frame 여부
-    (`tc_drop_frame`)도 함께 저장 — EDL/FCPXML 매칭에 사용.
+    (`tc_drop_frame`), 오디오 채널 수(`audio_channels`)도 함께 저장 —
+    EDL/FCPXML 매칭과 트랙 구성에 사용.
     """
     files = []
     for name in sorted(os.listdir(folder_path)):
@@ -459,6 +482,7 @@ def scan_video_files(folder_path: str) -> list[dict]:
                     "tc_seconds": tc_seconds,
                     "tc_drop_frame": tc_drop_frame,
                     "fps": fps,
+                    "audio_channels": get_audio_channels(full_path),
                 })
     return files
 
@@ -625,16 +649,19 @@ def main():
             edl_path = None
             warn_edl_risks(files)
             edl_fps = resolve_edl_rate(files, 24.0)
-            edl_content = generate_edl(validated, files, fps=edl_fps)
+            timeline_name = os.path.splitext(os.path.basename(srt_path))[0]
+            edl_content = generate_edl(validated, files, title=timeline_name, fps=edl_fps)
             if edl_content:
                 edl_path = srt_path.replace(".srt", ".edl")
                 with open(edl_path, "w", encoding="utf-8") as ef:
                     ef.write(edl_content)
-                log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
+                log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f}, "
+                    f"타임라인 시작 TC {RECORD_START_TC}:00 기준)")
 
             # FCPXML 생성 (다빈치 권장 — reference id 매칭으로 metadata TC 무관)
             fcpxml_path = None
-            fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps)
+            fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps,
+                                             project_name=timeline_name)
             if fcpxml_content:
                 fcpxml_path = srt_path.replace(".srt", ".fcpxml")
                 with open(fcpxml_path, "w", encoding="utf-8") as ff:
@@ -1080,16 +1107,19 @@ def main():
         edl_path = None
         warn_edl_risks(files)
         edl_fps = resolve_edl_rate(files, 24.0)
-        edl_content = generate_edl(validated, files, fps=edl_fps)
+        timeline_name = os.path.splitext(os.path.basename(srt_path))[0]
+        edl_content = generate_edl(validated, files, title=timeline_name, fps=edl_fps)
         if edl_content:
             edl_path = srt_path.replace(".srt", ".edl")
             with open(edl_path, "w", encoding="utf-8") as ef:
                 ef.write(edl_content)
-            log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
+            log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f}, "
+                f"타임라인 시작 TC {RECORD_START_TC}:00 기준)")
 
         # FCPXML 생성 (다빈치 권장 — 파일 경로 매칭이라 reel name/TC 불일치에 강함)
         fcpxml_path = None
-        fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps)
+        fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps,
+                                         project_name=timeline_name)
         if fcpxml_content:
             fcpxml_path = srt_path.replace(".srt", ".fcpxml")
             with open(fcpxml_path, "w", encoding="utf-8") as ff:
