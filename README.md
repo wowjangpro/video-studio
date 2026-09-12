@@ -38,7 +38,7 @@ Each module can be run with either **Ollama** (local GPU) or **Claude** (Claude 
 
 The Claude engine shells out to the system `claude` binary in pipe mode (`claude -p`) with these options:
 
-- `--model claude-opus-4-7`
+- `--model claude-fable-5-1`
 - `--output-format json`
 - `--no-session-persistence` — does not touch your main Claude Code session
 - `--dangerously-skip-permissions` — bypasses permission prompts during automated analysis

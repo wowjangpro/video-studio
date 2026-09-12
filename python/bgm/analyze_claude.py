@@ -14,6 +14,10 @@ import numpy as np
 from PIL import Image
 
 
+# Claude Code CLI 에 넘길 모델
+CLAUDE_MODEL = "claude-fable-5-1"
+
+
 def emit(data: dict) -> None:
     print(json.dumps(data, ensure_ascii=False), flush=True)
 
@@ -82,7 +86,7 @@ def analyze_with_claude(frame_paths: list[str], preference: str = "") -> dict:
 
     cmd = [
         "claude", "-p",
-        "--model", "claude-opus-4-7",
+        "--model", CLAUDE_MODEL,
         "--output-format", "json",
         "--no-session-persistence",
     ]

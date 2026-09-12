@@ -13,6 +13,10 @@ import subprocess
 BATCH_SIZE = 40
 
 
+# Claude Code CLI 에 넘길 모델
+CLAUDE_MODEL = "claude-fable-5-1"
+
+
 def _build_env() -> dict:
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
@@ -22,7 +26,7 @@ def _build_env() -> dict:
 def call_claude(prompt: str, timeout: int = 300) -> str:
     cmd = [
         "claude", "-p",
-        "--model", "claude-opus-5",
+        "--model", CLAUDE_MODEL,
         "--output-format", "json",
         "--no-session-persistence",
     ]

@@ -11,6 +11,10 @@ import sys
 import time
 
 
+# Claude Code CLI 에 넘길 모델. 여기만 바꾸면 autocut 전체가 따라간다.
+DEFAULT_MODEL = "claude-fable-5-1"
+
+
 def _log(msg: str):
     print(f"[claude] {msg}", file=sys.stderr, flush=True)
 
@@ -39,7 +43,7 @@ def check_claude_available() -> bool:
 
 def call_claude_text(
     prompt: str,
-    model: str = "claude-opus-5",
+    model: str = DEFAULT_MODEL,
     json_schema: dict | None = None,
     timeout: int = 300,
     max_retries: int = 2,
@@ -108,7 +112,7 @@ def call_claude_text(
 def call_claude_vision(
     prompt: str,
     image_paths: list[str],
-    model: str = "claude-opus-5",
+    model: str = DEFAULT_MODEL,
     timeout: int = 180,
     max_retries: int = 2,
 ) -> str:

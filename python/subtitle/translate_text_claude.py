@@ -13,10 +13,14 @@ LANG_NAMES = {
 }
 
 
+# Claude Code CLI 에 넘길 모델
+CLAUDE_MODEL = "claude-fable-5-1"
+
+
 def call_claude(prompt: str, timeout: int = 300) -> str:
     cmd = [
         "claude", "-p",
-        "--model", "claude-opus-5",
+        "--model", CLAUDE_MODEL,
         "--output-format", "json",
         "--no-session-persistence",
         "--dangerously-skip-permissions",

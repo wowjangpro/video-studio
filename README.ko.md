@@ -38,7 +38,7 @@
 
 Claude 엔진은 시스템에 설치된 `claude` 명령을 `claude -p` (pipe mode)로 호출합니다. 옵션은 아래를 사용합니다:
 
-- `--model claude-opus-4-7`
+- `--model claude-fable-5-1`
 - `--output-format json`
 - `--no-session-persistence` — 메인 세션에 영향 주지 않음
 - `--dangerously-skip-permissions` — 자동 분석 중 권한 프롬프트 우회

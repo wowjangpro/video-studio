@@ -14,6 +14,10 @@ LANG_NAMES = {
 }
 
 
+# Claude Code CLI 에 넘길 모델
+CLAUDE_MODEL = "claude-fable-5-1"
+
+
 def _build_env() -> dict:
     """중첩 세션 방지를 위해 CLAUDECODE 환경변수 제거"""
     env = os.environ.copy()
@@ -25,7 +29,7 @@ def call_claude(prompt: str, timeout: int = 300) -> str:
     """Claude CLI 호출"""
     cmd = [
         "claude", "-p",
-        "--model", "claude-opus-5",
+        "--model", CLAUDE_MODEL,
         "--output-format", "json",
         "--no-session-persistence",
     ]
