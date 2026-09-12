@@ -379,6 +379,7 @@ export function registerAutocutIpc(): void {
                 keepSegments: data.keepSegments,
                 srtPath: data.srtPath,
                 edlPath: data.edlPath || null,
+                fcpxmlPath: data.fcpxmlPath || null,
                 totalKeep: data.totalKeep,
                 totalDuration: data.totalDuration,
                 keepSpeechSec: data.keepSpeechSec ?? 0,

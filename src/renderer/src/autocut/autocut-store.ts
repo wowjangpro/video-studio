@@ -74,6 +74,7 @@ interface AppState {
   keepSegments: KeepSegment[]
   srtPath: string | null
   edlPath: string | null
+  fcpxmlPath: string | null
   errorMessage: string | null
   keepSpeechSec: number
   keepNonspeechSec: number
@@ -105,7 +106,7 @@ interface AppState {
   setPaused: (paused: boolean) => void
   setProgress: (stage: ProcessStage, percent: number, message: string) => void
   addWindowResult: (result: WindowResult) => void
-  setAnalysisComplete: (keepSegments: KeepSegment[], srtPath: string, edlPath?: string | null, keepSpeechSec?: number, keepNonspeechSec?: number) => void
+  setAnalysisComplete: (keepSegments: KeepSegment[], srtPath: string, edlPath?: string | null, fcpxmlPath?: string | null, keepSpeechSec?: number, keepNonspeechSec?: number) => void
   setError: (message: string) => void
   setTimelineZoom: (zoom: number) => void
   setTimelineScroll: (scrollLeft: number) => void
@@ -137,6 +138,7 @@ const initialState = {
   keepSegments: [] as KeepSegment[],
   srtPath: null as string | null,
   edlPath: null as string | null,
+  fcpxmlPath: null as string | null,
   errorMessage: null as string | null,
   keepSpeechSec: 0,
   keepNonspeechSec: 0,
@@ -175,6 +177,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
       keepSegments: [],
       srtPath: null,
       edlPath: null,
+      fcpxmlPath: null,
       errorMessage: null,
       resumeInfo: resumeInfo ?? null
     })
@@ -290,7 +293,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
     }
   },
 
-  setAnalysisComplete: (keepSegments, srtPath, edlPath, keepSpeechSec, keepNonspeechSec) =>
+  setAnalysisComplete: (keepSegments, srtPath, edlPath, fcpxmlPath, keepSpeechSec, keepNonspeechSec) =>
     set({
       stage: 'complete',
       percent: 100,
@@ -298,6 +301,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
       keepSegments,
       srtPath,
       edlPath: edlPath || null,
+      fcpxmlPath: fcpxmlPath || null,
       analysisFileIndex: -1,
       keepSpeechSec: keepSpeechSec ?? 0,
       keepNonspeechSec: keepNonspeechSec ?? 0,

@@ -23,6 +23,7 @@ export default function AutocutModule(): JSX.Element {
   const keepSegments = useAutocutStore((s) => s.keepSegments)
   const srtPath = useAutocutStore((s) => s.srtPath)
   const edlPath = useAutocutStore((s) => s.edlPath)
+  const fcpxmlPath = useAutocutStore((s) => s.fcpxmlPath)
   const keepSpeechSec = useAutocutStore((s) => s.keepSpeechSec)
   const keepNonspeechSec = useAutocutStore((s) => s.keepNonspeechSec)
   const previewMode = useAutocutStore((s) => s.previewMode)
@@ -53,7 +54,7 @@ export default function AutocutModule(): JSX.Element {
       addWindowResult(data)
     })
     const cleanupComplete = window.electronAPI.autocut.onAnalysisComplete((data) => {
-      setAnalysisComplete(data.keepSegments, data.srtPath, data.edlPath, data.keepSpeechSec, data.keepNonspeechSec)
+      setAnalysisComplete(data.keepSegments, data.srtPath, data.edlPath, data.fcpxmlPath, data.keepSpeechSec, data.keepNonspeechSec)
     })
     const cleanupError = window.electronAPI.autocut.onError((message) => {
       setError(message)
@@ -274,6 +275,7 @@ export default function AutocutModule(): JSX.Element {
                       return fmt(totalSec)
                     })()}
                     {edlPath && ' | EDL 생성됨'}
+                    {fcpxmlPath && ' | FCPXML 생성됨'}
                   </span>
                   <div className="settings-panel__controls">
                     <button

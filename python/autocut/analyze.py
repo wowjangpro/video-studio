@@ -22,7 +22,8 @@ from stage2 import tag_window_context, tag_windows_batch_claude
 from scene_detector import cross_validate_all, group_windows_to_scenes, filter_ng_scenes, log_quality_summary, window_has_speech
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
-from edl_export import generate_edl, resolve_edl_rate
+from edl_export import (generate_edl, resolve_edl_rate, resolve_tc_base,
+                        timecode_to_frames, assign_reel_names)
 from fcpxml_export import generate_fcpxml
 from silence_trim import trim_silence_in_segments
 
@@ -276,33 +277,61 @@ def get_video_duration(path: str) -> float:
 
 
 def get_video_fps(path: str) -> float:
-    """ffprobe로 영상 fps 조회 (r_frame_rate, 분수 형식)"""
+    """ffprobe로 영상 fps 조회 (r_frame_rate, 분수 형식)
+
+    csv 출력은 파일에 따라 빈 필드가 하나 더 붙어 `30000/1001,` 처럼
+    나오는 경우가 있다(같은 카메라의 같은 XAVC 파일들 중 일부에서 관측).
+    그대로 split("/")하면 float("1001,")에서 예외가 나 fps가 0으로 떨어지고,
+    그 파일은 타임코드를 24fps 기준으로 잘못 환산해 EDL에서 offline이 된다.
+    JSON으로 읽고, 커버아트가 아닌 첫 비디오 스트림을 골라 파싱한다.
+    """
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path],
+            ["ffprobe", "-v", "quiet", "-select_streams", "v",
+             "-show_entries", "stream=r_frame_rate:stream_disposition=attached_pic",
+             "-of", "json", path],
             capture_output=True, text=True,
         )
-        rate = result.stdout.strip()
-        if "/" in rate:
-            num, den = rate.split("/")
-            return float(num) / float(den) if float(den) > 0 else 0.0
-        return float(rate)
+        for stream in json.loads(result.stdout).get("streams", []):
+            # 커버아트(attached_pic)도 비디오 스트림으로 잡힌다. r_frame_rate가
+            # 90000/1 같은 값이라 그대로 쓰면 TC base가 붕괴한다.
+            if stream.get("disposition", {}).get("attached_pic"):
+                continue
+            rate = (stream.get("r_frame_rate") or "").strip().rstrip(",")
+            if not rate:
+                continue
+            if "/" in rate:
+                num, den = rate.split("/", 1)
+                den = float(den)
+                if den > 0:
+                    return float(num) / den
+            else:
+                return float(rate)
+        return 0.0
     except Exception:
         return 0.0
 
 
-def get_video_start_tc_seconds(path: str, fps: float | None = None) -> float:
-    """영상 metadata의 timecode를 초 단위로 반환.
+def get_video_start_tc(path: str, fps: float | None = None) -> tuple[float, bool | None]:
+    """영상 metadata의 시작 타임코드 → (실시간 초, drop frame 여부)
+
+    타임코드가 없으면 drop frame 여부는 `False`가 아니라 `None`이다. 없는 TC를
+    "NDF"로 돌려주면 `resolve_edl_drop_frame`의 다수결에서 NDF 한 표로 세어져,
+    TC 없는 파일이 많은 폴더에서 진짜 DF 소스가 NDF로 뒤집힌다.
 
     fps를 넘기면 재프로브 없이 재사용한다(스캔 시 파일당 ffprobe 호출 절감).
 
     카메라 영상의 timecode 위치는 다양:
       - 비디오 스트림 tags.timecode
-      - data 스트림 (Timed Metadata Media Handler) tags.timecode  ← GoPro/소니 등
+      - data 스트림 (Timed Metadata Media Handler) tags.timecode  ← 소니/GoPro 등
       - format-level tags.timecode
 
     모든 스트림을 검사하여 timecode를 찾는다.
+
+    NTSC에서는 TC를 프레임 번호로 환산한 뒤 실제 레이트로 나눠야 한다.
+    NDF 타임코드 01:00:00:00은 3600초가 아니라 3603.6초이고, 이를 초로
+    단순 환산하면 13시간대 TC에서 약 47초가 어긋나 다빈치가 클립을 찾지
+    못한다(offline). drop frame 여부도 TC 표기(';')로만 판정된다.
     """
     try:
         # 모든 스트림 정보 + format tags
@@ -324,19 +353,16 @@ def get_video_start_tc_seconds(path: str, fps: float | None = None) -> float:
         if not tc:
             tc = data.get("format", {}).get("tags", {}).get("timecode", "")
         if not tc:
-            return 0.0
+            return 0.0, None
 
-        # 파싱: HH:MM:SS:FF 또는 HH:MM:SS;FF (drop frame)
-        parts = tc.replace(";", ":").split(":")
-        if len(parts) != 4:
-            return 0.0
-        h, m, s, f = (int(x) for x in parts)
         if fps is None:
             fps = get_video_fps(path)
         fps = fps or 24.0
-        return h * 3600 + m * 60 + s + f / fps
+        fps_int, actual_fps = resolve_tc_base(fps)
+        frames, drop_frame = timecode_to_frames(tc, fps_int)
+        return frames / actual_fps, drop_frame
     except Exception:
-        return 0.0
+        return 0.0, None
 
 
 def extract_audio_wav(video_path: str, output_path: str):
@@ -351,10 +377,71 @@ def extract_audio_wav(video_path: str, output_path: str):
     )
 
 
+def _fmt_names(names: list[str], limit: int = 5) -> str:
+    return ", ".join(names[:limit]) + (f" 외 {len(names) - limit}개" if len(names) > limit else "")
+
+
+def warn_edl_risks(files: list[dict]):
+    """EDL conform을 깨뜨릴 수 있는 소스 조건을 미리 경고.
+
+    다빈치는 reel name + source timecode 로만 미디어를 찾으므로, 아래
+    조건들은 조용히 offline이나 오매칭으로 이어진다.
+    """
+    # fps 미감지 — TC를 24fps 기준으로 잘못 환산한다
+    missing = [f["name"] for f in files if not f.get("fps")]
+    if missing:
+        log(f"경고: fps 감지 실패 {len(missing)}/{len(files)}개 ({_fmt_names(missing)}) — "
+            f"해당 클립은 타임코드가 어긋나 다빈치에서 offline이 될 수 있음")
+
+    # 혼합 레이트 — CMX 3600은 FCM 헤더가 하나뿐이라 최빈 레이트로 통일된다.
+    # 다른 레이트의 파일은 source TC가 그 레이트로 환산되어 어긋난다
+    # (29.97 소스에 59.94 슬로모가 섞이면 TC가 약 절반이 된다).
+    rate = resolve_edl_rate(files, 0.0)
+    if rate:
+        odd = [f["name"] for f in files
+               if f.get("fps") and abs(round(f["fps"], 3) - rate) > 0.01]
+        if odd:
+            log(f"경고: EDL 레이트({rate:.3f})와 다른 fps 파일 {len(odd)}개 "
+                f"({_fmt_names(odd)}) — CMX 3600은 단일 레이트만 표현할 수 있어 "
+                f"해당 클립은 타임코드가 어긋난다. FCPXML을 사용할 것")
+
+    # 100fps 이상 — CMX 3600의 프레임 필드는 2자리뿐이라 표현할 수 없다.
+    # (VFR mp4의 r_frame_rate가 1000/1로 보고되는 경우가 있어 실제로 밟힌다)
+    if rate and resolve_tc_base(rate)[0] >= 100:
+        log(f"경고: EDL 레이트가 {rate:.3f}fps — CMX 3600은 프레임 필드가 2자리뿐이라 "
+            f"100fps 이상을 표현할 수 없다. EDL 타임코드가 깨지므로 FCPXML을 사용할 것")
+
+    # DF/NDF 혼재 — fps 혼재와 같은 급의 파손이다. CMX 3600은 FCM 헤더가
+    # 하나뿐이라 소수파 파일은 자기 미디어와 다른 표기의 source TC를 받고
+    # 분당 2프레임(60 base는 4프레임)씩 어긋난 채 offline 된다.
+    tc_flags = {f["tc_drop_frame"] for f in files if f.get("tc_drop_frame") is not None}
+    if len(tc_flags) > 1:
+        df = [f["name"] for f in files if f.get("tc_drop_frame")]
+        ndf = [f["name"] for f in files if f.get("tc_drop_frame") is False]
+        log(f"경고: drop frame 타임코드와 non-drop 타임코드가 섞여 있음 "
+            f"(DF {len(df)}개 / NDF {len(ndf)}개) — CMX 3600은 FCM 헤더가 하나뿐이라 "
+            f"소수파 클립의 타임코드가 어긋난다. FCPXML을 사용할 것")
+
+    # reel name 유일화 — CMX 3600 reel 필드는 8자뿐이라 앞 8자가 같은 파일들은
+    # 인덱스 접미사로 유일화된다(안 그러면 다빈치가 구분하지 못해 잘못된 클립에
+    # conform 된다). 유일화된 reel은 실제 파일명과 다르므로, 매칭은
+    # * FROM CLIP NAME: 의 전체 파일명이 담당한다.
+    reels = assign_reel_names(files)
+    renamed = sum(1 for f, r in zip(files, reels)
+                  if not os.path.splitext(f["name"])[0].upper().startswith(r.strip()))
+    if renamed:
+        log(f"안내: reel name이 실제 파일명과 다른 파일 {renamed}/{len(files)}개 "
+            f"(8자 초과·중복·비ASCII 문자 때문) — "
+            f"다빈치 Project Settings > General Options > Conform Options 에서 "
+            f"'Extract reel names from EDL comments' 를 켜야 "
+            f"'* FROM CLIP NAME:' 의 전체 파일명으로 매칭됨")
+
+
 def scan_video_files(folder_path: str) -> list[dict]:
     """폴더 내 영상 파일 검색 및 시간순 정렬
 
-    각 파일에 metadata timecode(`tc_seconds`)도 함께 저장 — FCPXML 매칭에 사용.
+    각 파일에 metadata timecode(`tc_seconds`)와 drop frame 여부
+    (`tc_drop_frame`)도 함께 저장 — EDL/FCPXML 매칭에 사용.
     """
     files = []
     for name in sorted(os.listdir(folder_path)):
@@ -364,12 +451,13 @@ def scan_video_files(folder_path: str) -> list[dict]:
             duration = get_video_duration(full_path)
             if duration > 0:
                 fps = get_video_fps(full_path)
-                tc_seconds = get_video_start_tc_seconds(full_path, fps)
+                tc_seconds, tc_drop_frame = get_video_start_tc(full_path, fps)
                 files.append({
                     "path": full_path,
                     "name": name,
                     "duration": duration,
                     "tc_seconds": tc_seconds,
+                    "tc_drop_frame": tc_drop_frame,
                     "fps": fps,
                 })
     return files
@@ -534,20 +622,21 @@ def main():
             write_srt(validated, srt_path)
 
             # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
-            edl_path = srt_path.replace(".srt", ".edl")
-            if not any(f.get("fps") for f in files):
-                log("경고: 영상 fps 감지 실패 — EDL을 24fps로 fallback (다빈치 offline 위험, ffprobe 확인 필요)")
+            edl_path = None
+            warn_edl_risks(files)
             edl_fps = resolve_edl_rate(files, 24.0)
             edl_content = generate_edl(validated, files, fps=edl_fps)
             if edl_content:
+                edl_path = srt_path.replace(".srt", ".edl")
                 with open(edl_path, "w", encoding="utf-8") as ef:
                     ef.write(edl_content)
                 log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
 
             # FCPXML 생성 (다빈치 권장 — reference id 매칭으로 metadata TC 무관)
-            fcpxml_path = srt_path.replace(".srt", ".fcpxml")
-            fcpxml_content = generate_fcpxml(validated, files, fps=24)
+            fcpxml_path = None
+            fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps)
             if fcpxml_content:
+                fcpxml_path = srt_path.replace(".srt", ".fcpxml")
                 with open(fcpxml_path, "w", encoding="utf-8") as ff:
                     ff.write(fcpxml_content)
                 log(f"FCPXML 생성: {fcpxml_path}")
@@ -562,6 +651,7 @@ def main():
                 "keepSegments": validated,
                 "srtPath": srt_path,
                 "edlPath": edl_path,
+                "fcpxmlPath": fcpxml_path,
                 "totalKeep": len(validated),
                 "totalDuration": cached_duration,
                 "keepSpeechSec": speech_sec,
@@ -987,15 +1077,24 @@ def main():
         write_srt(validated, srt_path)
 
         # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
-        edl_path = srt_path.replace(".srt", ".edl")
-        if not any(f.get("fps") for f in files):
-            log("경고: 영상 fps 감지 실패 — EDL을 24fps로 fallback (다빈치 offline 위험, ffprobe 확인 필요)")
+        edl_path = None
+        warn_edl_risks(files)
         edl_fps = resolve_edl_rate(files, 24.0)
         edl_content = generate_edl(validated, files, fps=edl_fps)
         if edl_content:
+            edl_path = srt_path.replace(".srt", ".edl")
             with open(edl_path, "w", encoding="utf-8") as ef:
                 ef.write(edl_content)
             log(f"EDL 생성: {edl_path} (fps={edl_fps:.3f})")
+
+        # FCPXML 생성 (다빈치 권장 — 파일 경로 매칭이라 reel name/TC 불일치에 강함)
+        fcpxml_path = None
+        fcpxml_content = generate_fcpxml(validated, files, fps=edl_fps)
+        if fcpxml_content:
+            fcpxml_path = srt_path.replace(".srt", ".fcpxml")
+            with open(fcpxml_path, "w", encoding="utf-8") as ff:
+                ff.write(fcpxml_content)
+            log(f"FCPXML 생성: {fcpxml_path}")
 
         # 완료
         elapsed = time.time() - t_start
@@ -1008,6 +1107,7 @@ def main():
             "keepSegments": validated,
             "srtPath": srt_path,
             "edlPath": edl_path,
+            "fcpxmlPath": fcpxml_path,
             "totalKeep": len(validated),
             "totalDuration": total_duration,
             "keepSpeechSec": speech_sec,
