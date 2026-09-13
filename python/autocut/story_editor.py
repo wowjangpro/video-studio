@@ -36,6 +36,7 @@ MONTAGE_TYPICAL = 5.5   # 몽타주 컷 수를 정할 때의 기준 길이
 MONTAGE_SWING = 0.3     # 몽타주 안에서 긴 컷/짧은 컷을 번갈아 (촬영자 스타일: 중앙 6초, 5초 미만 39%)
 SPAN_MIN = 3.5         # 연속 구간 컷 하나의 최소 길이
 MIN_CUT = 2.0          # validate_segments 와 같은 하한
+ANCHOR_SEC = 1.0       # analyze.py 의 '편집 시작점' 앵커(0~1초)와 겹치지 않게 비워 두는 구간
 SEAM = 0.8             # 윈도우 경계에서 비켜 서는 여유
 TOLERANCE = 1.07     # 목표의 7%까지 허용
 
@@ -287,37 +288,45 @@ def _clamp_cuts(cuts, windows: list[dict], files: list[dict]):
     for wid, s, e in cuts:
         t = windows[wid]["globalStart"] + 0.01
         fs, fe = next(((a, b) for a, b in bounds if a <= t < b), (0.0, total))
-        s2, e2 = max(0.0, fs, s), min(total, fe, e)
+        # 첫 1초는 analyze.py 가 넣는 '편집 시작점' 앵커(0~1초) 몫이라 비워 둔다
+        s2, e2 = max(ANCHOR_SEC, fs, s), min(total, fe, e)
         if e2 - s2 >= MIN_CUT:
             out.append((wid, s2, e2))
     return out
 
 
 def _validate_in_order(segments: list[dict]) -> list[dict]:
-    """순서를 지키면서 겹침·2초 미만만 정리 (validate_segments 는 정렬을 해버린다).
+    """순서를 지키면서 소스 구간이 서로 겹치지 않게 만든다 (validate_segments 는 정렬을 해버린다).
 
-    - 바로 앞 컷과 겹치면 앞 컷 끝에서 시작하도록 자른다 (멘트 +2초 확장 ↔ 다음 윈도우 컷)
-    - 그 외 이미 낸 컷과 절반 넘게 겹치면 중복으로 버린다
-      (훅이 쓴 윈도우를 막 안에서 다시 쓰는 '되짚기'는 절반 이하 겹침이라 살아남는다 — 의도)
+    이 앱의 타임라인·프리뷰·SRT 는 키프 구간이 **소스 시간에서 서로 겹치지 않는다**는
+    전제 위에 있다. 훅이 뒤 장면을 미리 쓰는 '되짚기'는 그 전제를 깨서 타임라인에
+    겹친 박스가 생기고 프리뷰가 엉뚱한 곳으로 건너뛴다. 그래서 먼저 낸 컷이 우선이고,
+    나중 컷은 이미 쓴 구간을 빼고 남는 조각만 쓴다(조각이 2초 미만이면 버린다).
+    훅은 목록 맨 앞이라 자연히 우선권을 갖는다.
     """
+    used: list[tuple[float, float]] = []   # 이미 낸 소스 구간
     out: list[dict] = []
     for seg in segments:
-        if out:
-            prev = out[-1]
-            if prev["globalStart"] <= seg["globalStart"] < prev["globalEnd"]:
-                # 직전 컷 안에서 시작 → 직전 컷 끝부터
-                seg["globalStart"] = round(prev["globalEnd"], 3)
-            elif seg["globalStart"] < prev["globalStart"] < seg["globalEnd"]:
-                # 직전 컷을 통째로 품는 경우 → 직전 컷 앞부분만 남긴다 (같은 푸티지 연속 재생 방지)
-                seg["globalEnd"] = round(prev["globalStart"], 3)
-        if seg["globalEnd"] - seg["globalStart"] < MIN_CUT:
-            continue
-        dup = any(min(seg["globalEnd"], o["globalEnd"]) - max(seg["globalStart"], o["globalStart"])
-                  > 0.5 * (seg["globalEnd"] - seg["globalStart"]) for o in out)
-        if dup:
-            continue
-        seg["id"] = len(out)
-        out.append(seg)
+        pieces = [(seg["globalStart"], seg["globalEnd"])]
+        for a, b in used:
+            nxt = []
+            for s, e in pieces:
+                if e <= a or s >= b:          # 안 겹침
+                    nxt.append((s, e))
+                else:                         # 겹치는 부분을 잘라내고 양쪽 조각을 남긴다
+                    if s < a:
+                        nxt.append((s, a))
+                    if e > b:
+                        nxt.append((b, e))
+            pieces = nxt
+        for s, e in pieces:
+            if e - s < MIN_CUT:
+                continue
+            piece = dict(seg)
+            piece["globalStart"], piece["globalEnd"] = round(s, 3), round(e, 3)
+            piece["id"] = len(out)
+            out.append(piece)
+            used.append((s, e))
     return out
 
 

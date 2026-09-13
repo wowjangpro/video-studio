@@ -101,7 +101,7 @@ interface AppState {
   setResumeInfo: (resumeInfo: ResumeInfo | null) => void
   selectFile: (index: number) => void
   setMediaUrl: (url: string) => void
-  seekTo: (globalTime: number) => void
+  seekTo: (globalTime: number, opts?: { keepSegmentIndex?: boolean }) => void
   updatePlayhead: (globalTime: number) => void
   setPaused: (paused: boolean) => void
   setProgress: (stage: ProcessStage, percent: number, message: string) => void
@@ -220,7 +220,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
 
   setMediaUrl: (url) => set({ mediaUrl: url }),
 
-  seekTo: (globalTime) => {
+  seekTo: (globalTime, opts) => {
     const { files, previewMode, keepSegments } = get()
     if (files.length === 0) return
 
@@ -236,12 +236,15 @@ export const useAutocutStore = create<AppState>((set, get) => ({
 
     const localTime = globalTime - files[targetIndex].cumulativeOffset
 
-    // 프리뷰 모드 중 seek → 해당 위치의 구간 인덱스로 동기화
+    // 프리뷰 모드 중 사용자 seek → 해당 위치의 구간 인덱스로 동기화.
+    // advancePreview/startPreview 가 순서대로 넘길 때는 인덱스를 이미 정했으므로
+    // 시간으로 다시 찾지 않는다 — 스토리 결과처럼 목록이 시간순이 아니면
+    // 시간 기반 재탐색이 엉뚱한 구간(훅 등)으로 점프시킨다.
     let segIdx: number | undefined
-    if (previewMode && keepSegments.length > 0) {
-      // 클릭 위치를 포함하는 구간, 없으면 다음 구간
+    if (previewMode && keepSegments.length > 0 && !opts?.keepSegmentIndex) {
+      // 클릭 위치를 포함하는 구간(끝은 열린 구간 — 경계에서 앞 구간과 이중 매치 방지), 없으면 다음 구간
       const containing = keepSegments.findIndex(
-        (s) => globalTime >= s.globalStart && globalTime <= s.globalEnd
+        (s) => globalTime >= s.globalStart && globalTime < s.globalEnd
       )
       if (containing >= 0) {
         segIdx = containing
@@ -331,7 +334,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
     const { keepSegments } = get()
     if (keepSegments.length === 0) return
     set({ previewMode: true, previewPaused: false, previewSegmentIndex: 0 })
-    get().seekTo(keepSegments[0].globalStart)
+    get().seekTo(keepSegments[0].globalStart, { keepSegmentIndex: true })
   },
 
   pausePreview: () => set({ previewPaused: true }),
@@ -352,7 +355,7 @@ export const useAutocutStore = create<AppState>((set, get) => ({
     set({ previewSegmentIndex: nextIndex })
     // 연속 구간이면 seek 없이 재생 유지 (0.5초 이내 차이)
     if (Math.abs(nextStart - currentEnd) > 0.5) {
-      get().seekTo(nextStart)
+      get().seekTo(nextStart, { keepSegmentIndex: true })
       return 'seeked'
     }
     return 'continuous'
