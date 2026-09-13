@@ -49,8 +49,9 @@ def build_window_index(windows: list[dict]) -> str:
     lines = []
     for i, w in enumerate(windows):
         label = LABEL_KO.get(w.get("label", ""), w.get("label", "?"))
+        shot = {"wide": "와이드", "closeup": "클로즈업"}.get(w.get("shot", ""), "")
         flag = " ✗" if w.get("usable") == "no" else ""
-        line = f"W{i} {_fmt(w['globalStart'])} [{label}]{flag} {w.get('desc', '').strip()}"
+        line = f"W{i} {_fmt(w['globalStart'])} [{label}{'/' + shot if shot else ''}]{flag} {w.get('desc', '').strip()}"
         if w.get("transcript"):
             line += f' 💬"{w["transcript"].strip()}"'
         lines.append(line)
@@ -120,6 +121,9 @@ __SYNOPSIS__
   "nonlinear": true 로 표시하면 그 자리를 지킵니다(나머지는 시간순으로 정렬됩니다).
 - **montage 비트는 후속 단계에서 윈도우마다 2~4초 컷으로 쪼개집니다.** 그러니
   evidence_windows 에 시각적으로 서로 다른 3~7개 윈도우를 고르세요(같은 앵글 반복 X).
+- **화각을 섞으세요.** 윈도우 라벨 뒤의 와이드/클로즈업이 화각입니다. 같은 행동을 보여주는
+  윈도우가 여럿이면 와이드와 클로즈업이 번갈아 오게 고르세요. 같은 화각·같은 자리의
+  윈도우가 3개 넘게 연달아 오는 비트는 지루합니다.
 - **길이**: 촬영자의 실제 편집 스타일은 **평균 9초, 중앙값 6초, 5초 미만 컷이 39%**입니다.
   target_seconds는 역할에 맞게 — hook 3~8, montage 컷당 2~4, complication/attempt 6~15,
   payoff 10~25, talk는 문장이 끝나는 길이. 10초 윈도우 격자에 맞추지 마세요.

@@ -27,6 +27,7 @@ from story_planner import plan_story_from_data, render_markdown
 ROLE_KO = {
     "hook": "훅", "setup": "설정", "complication": "사건", "attempt": "시도",
     "payoff": "보상", "breather": "숨", "montage": "몽타주", "talk": "멘트",
+    "cutaway": "컷어웨이",
 }
 # 예산 초과 시 이 순서로 뺀다 (앞일수록 먼저)
 DROP_PRIORITY = ["breather", "montage", "setup", "attempt", "talk", "complication", "payoff"]
@@ -36,6 +37,14 @@ MONTAGE_TYPICAL = 5.5   # 몽타주 컷 수를 정할 때의 기준 길이
 MONTAGE_SWING = 0.3     # 몽타주 안에서 긴 컷/짧은 컷을 번갈아 (촬영자 스타일: 중앙 6초, 5초 미만 39%)
 SPAN_MIN = 3.5         # 연속 구간 컷 하나의 최소 길이
 MIN_CUT = 2.0          # validate_segments 와 같은 하한
+
+# 시각 다양성 — 같은 테이크·같은 화각이 이어지면 지루하다
+SAME_TAKE_GAP = 60.0   # 같은 파일에서 이 간격(초) 안이면 같은 테이크로 본다
+RUN_MAX = 10.0         # 같은 테이크가 이만큼 이어지면 끊는다
+CUTAWAY_LEN = 2.5      # 끼워 넣는 컷어웨이 길이
+CUTAWAY_RADIUS = 180.0 # 컷어웨이 후보를 찾는 시간 반경(초)
+PUNCH_IN = {"wide": 1.3, "closeup": 1.2}  # 화각별 펀치인 배율 (4K 소스 기준 1.3×도 1080p 이상)
+SPLIT_MIN = 12.0       # 이보다 긴 단일 컷은 반으로 갈라 뒤쪽을 펀치인
 ANCHOR_SEC = 1.0       # analyze.py 의 '편집 시작점' 앵커(0~1초)와 겹치지 않게 비워 두는 구간
 SEAM = 0.8             # 윈도우 경계에서 비켜 서는 여유
 TOLERANCE = 1.07     # 목표의 7%까지 허용
@@ -61,8 +70,10 @@ def _groups(wids: list[int]) -> list[list[int]]:
 
 
 def _mid_cut(w: dict, length: float) -> tuple[float, float]:
+    """윈도우 한가운데 length 초. 꼬리 윈도우(파일 끝, 1~10초)는 길이가 모자랄 수 있으니
+    호출자가 (e - s) >= MIN_CUT 를 확인해야 한다 — 여기서는 음수만 막는다."""
     dur = w["globalEnd"] - w["globalStart"]
-    length = min(length, dur - 2 * SEAM)
+    length = max(0.0, min(length, dur - 2 * SEAM))
     s = w["globalStart"] + (dur - length) / 2
     return s, s + length
 
@@ -268,7 +279,7 @@ def _make_segment(seg_id: int, w: dict, wid: int, s: float, e: float,
         "has_speech": window_has_speech(w),
         "desc": w.get("desc", ""),
         "reason": reason,
-        "hint": f"story:{beat.get('id', '')}",   # format_srt_label 은 모르는 키를 무시한다
+        "hint": "",          # "crop"(펀치인) / "insert"(컷어웨이) — format_srt_label 이 태그로 표시
         "scene_id": scene.get("id"),
         "scene_action": scene.get("action", ""),
         "window_id": wid,
@@ -330,6 +341,132 @@ def _validate_in_order(segments: list[dict]) -> list[dict]:
     return out
 
 
+def _same_take(a: dict, b: dict, windows: list[dict], file_of) -> bool:
+    wa, wb = windows[a["window_id"]], windows[b["window_id"]]
+    return (file_of(a["globalStart"]) == file_of(b["globalStart"])
+            and abs(b["globalStart"] - a["globalEnd"]) < SAME_TAKE_GAP
+            and wa.get("shot") == wb.get("shot"))
+
+
+def _find_cutaway(near_t: float, shot: str, windows: list[dict], used_ranges, used_wids: set) -> int | None:
+    """근처(±CUTAWAY_RADIUS)에서 다른 화각·미사용·품질 양호 윈도우 하나. 가까운 것 우선."""
+    best = None
+    for i, w in enumerate(windows):
+        if i in used_wids or w.get("usable") != "yes" or w.get("shot") == shot:
+            continue
+        if w["globalEnd"] - w["globalStart"] < CUTAWAY_LEN + 2 * SEAM:   # 꼬리 윈도우는 못 쓴다
+            continue
+        if w.get("label") in ("dark", "driving", "no_frame", "unknown"):
+            continue
+        dt = abs(w["globalStart"] - near_t)
+        if dt > CUTAWAY_RADIUS:
+            continue
+        s, e = _mid_cut(w, CUTAWAY_LEN)
+        if any(min(e, b) - max(s, a) > 0 for a, b in used_ranges):
+            continue
+        score = dt - 60 * float(w.get("motion") or 0)   # 가깝고 움직임 있는 쪽
+        if best is None or score < best[0]:
+            best = (score, i)
+    return best[1] if best else None
+
+
+def add_variety(segments: list[dict], windows: list[dict], files: list[dict], scene_of: dict) -> list[dict]:
+    """같은 테이크·같은 화각이 RUN_MAX 초 넘게 이어지면 끊는다.
+
+    사람 편집자가 하는 두 가지를 코드로 옮긴 것이다.
+      1) 컷어웨이 — 근처에 다른 화각 그림이 있으면 2.5초 끼워 넣는다
+      2) 펀치인  — 없으면(삼각대 원테이크) 연속 컷을 1.0× / 1.3× 로 번갈아 확대한다.
+         FCPXML 은 adjust-transform 으로 실제 줌이 들어가고, EDL/SRT 는 '크롭' 표시만 남는다.
+    12초 넘는 단일 컷은 반으로 갈라 뒤쪽을 펀치인한다(점프컷+리프레임).
+    총 길이는 컷어웨이만큼 앞 컷을 줄여 지킨다. 멘트 컷 안에는 컷어웨이를 넣지 않는다(음성 끊김).
+    """
+    if not segments:
+        return segments
+    bounds = [(f["offset"], f["offset"] + f["duration"]) for f in files]
+
+    def file_of(t):
+        return next((i for i, (a, b) in enumerate(bounds) if a <= t < b), -1)
+
+    # 1) 긴 단일 컷은 반으로 — 뒤쪽 펀치인
+    split = []
+    for seg in segments:
+        ln = seg["globalEnd"] - seg["globalStart"]
+        shot = windows[seg["window_id"]].get("shot", "wide")
+        if ln >= SPLIT_MIN and seg.get("role") != "hook":
+            mid = round((seg["globalStart"] + seg["globalEnd"]) / 2, 3)
+            a, b = dict(seg), dict(seg)
+            a["globalEnd"] = mid
+            b["globalStart"] = mid
+            b["hint"], b["zoom"] = "crop", PUNCH_IN.get(shot, 1.25)
+            split += [a, b]
+        else:
+            split.append(seg)
+    segments = split
+
+    # 2) 같은 테이크 런 찾기
+    runs, cur = [], [0]
+    for i in range(1, len(segments)):
+        if _same_take(segments[i - 1], segments[i], windows, file_of):
+            cur.append(i)
+        else:
+            runs.append(cur); cur = [i]
+    runs.append(cur)
+
+    used_ranges = [(x["globalStart"], x["globalEnd"]) for x in segments]
+    used_wids = {x["window_id"] for x in segments}
+    inserts: dict[int, dict] = {}   # 이 인덱스 '뒤'에 끼울 컷어웨이
+    n_cut = n_punch = 0
+
+    for run in runs:
+        dur = sum(segments[i]["globalEnd"] - segments[i]["globalStart"] for i in run)
+        if dur <= RUN_MAX or len(run) < 2:
+            continue
+        shot = windows[segments[run[0]]["window_id"]].get("shot", "wide")
+        acc, toggle = 0.0, False
+        for k, i in enumerate(run):
+            seg = segments[i]
+            acc += seg["globalEnd"] - seg["globalStart"]
+            if k == len(run) - 1 or acc < RUN_MAX * 0.8:
+                continue
+            # 여기서 끊는다: 컷어웨이 → 없으면 다음 컷 펀치인
+            wid = None
+            if seg.get("role") != "talk":
+                wid = _find_cutaway(seg["globalEnd"], shot, windows, used_ranges, used_wids)
+            if wid is not None:
+                w = windows[wid]
+                cs, ce = _mid_cut(w, CUTAWAY_LEN)
+                cut = _make_segment(0, w, wid, cs, ce,
+                                    {"id": "CUTAWAY", "role": "cutaway",
+                                     "intent": w.get("desc", "")[:40]},
+                                    seg.get("act", ""), scene_of)
+                cut["hint"] = "insert"
+                inserts[i] = cut
+                used_ranges.append((cs, ce)); used_wids.add(wid)
+                # 총 길이 보전 — 끼운 만큼 앞 컷을 줄인다
+                if seg["globalEnd"] - seg["globalStart"] - CUTAWAY_LEN >= MIN_CUT:
+                    seg["globalEnd"] = round(seg["globalEnd"] - CUTAWAY_LEN, 3)
+                n_cut += 1
+            else:
+                nxt = segments[run[k + 1]]
+                toggle = not toggle
+                if toggle and not nxt.get("zoom"):
+                    nxt["hint"], nxt["zoom"] = "crop", PUNCH_IN.get(shot, 1.25)
+                    n_punch += 1
+            acc = 0.0
+
+    out = []
+    for i, seg in enumerate(segments):
+        out.append(seg)
+        if i in inserts:
+            out.append(inserts[i])
+    for i, seg in enumerate(out):
+        seg["id"] = i
+    n_split = sum(1 for x in split if x.get("zoom") and x.get("hint") == "crop") - n_punch
+    _log(f"다양성: 같은 테이크 런 {sum(1 for r in runs if len(r) >= 2)}개 → "
+         f"컷어웨이 {n_cut}개 삽입, 펀치인 {n_punch}개, 긴 컷 분할 펀치인 {max(n_split, 0)}개")
+    return out
+
+
 def assemble(plan: dict, windows: list[dict], scenes: list[dict],
              speech_segments: list[dict], target_minutes: int,
              files: list[dict] | None = None) -> list[dict]:
@@ -362,6 +499,7 @@ def assemble(plan: dict, windows: list[dict], scenes: list[dict],
         for wid, s, e in x["cuts"]:
             segments.append(_make_segment(len(segments), windows[wid], wid, s, e, x["beat"], x["act"], scene_of))
     segments = _validate_in_order(segments)
+    segments = add_variety(segments, windows, files or [], scene_of)
 
     total = sum(s["globalEnd"] - s["globalStart"] for s in segments)
     lens = sorted(s["globalEnd"] - s["globalStart"] for s in segments)
