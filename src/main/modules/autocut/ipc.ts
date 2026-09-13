@@ -334,7 +334,7 @@ export function registerAutocutIpc(): void {
       }
 
       // 리소스 점유 요청
-      const usesClaude = options.ai_engine === 'claude'
+      const usesClaude = options.ai_engine === 'claude' || options.ai_engine === 'story'
       const resourceResult = resourceManager.acquire('autocut', ['ollama'], { usesClaude })
       if (resourceResult.conflict) {
         sendToRenderer('autocut:error', resourceResult.message || '리소스 충돌')
@@ -401,7 +401,7 @@ export function registerAutocutIpc(): void {
         },
         (stderr) => {
           // Python 모듈 디버그 로그는 콘솔에만 출력
-          if (/^\[(?:analyze|claude|stage[12]|storyboard|stt|scene_detector|scene_scorer|budget_selector|vad|merger)\]/.test(stderr)) {
+          if (/^\[(?:analyze|claude|stage[12]|storyboard|story|story_edit|silence_trim|stt|scene_detector|scene_scorer|budget_selector|vad|merger)\]/.test(stderr)) {
             return
           }
           const lower = stderr.toLowerCase()

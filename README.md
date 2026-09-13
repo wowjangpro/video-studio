@@ -217,7 +217,7 @@ npm run dist
 - **AI / ML**:
   - faster-whisper (STT)
   - Ollama (Qwen2.5-VL, Qwen3, LLaMA 3.2 Vision, Qwen2.5)
-  - Claude Code CLI (`claude -p`, Opus 4.7) — used for both vision and text
+  - Claude Code CLI (`claude -p`, Fable 5.1) — used for both vision and text
   - ACE-Step 1.5 (BGM generation)
 - **Media**: FFmpeg, Silero VAD
 

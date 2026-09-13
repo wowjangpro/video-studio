@@ -15,7 +15,7 @@ import html
 import os
 from urllib.parse import quote
 
-from edl_export import resolve_tc_base, resolve_edl_drop_frame
+from edl_export import resolve_tc_base, resolve_edl_drop_frame, timecode_to_frames, RECORD_START_TC
 
 # NTSC 레이트의 FCP 포맷 이름 접미사
 _NTSC_LABEL = {24: "2398", 30: "2997", 60: "5994"}
@@ -93,7 +93,10 @@ def generate_fcpxml(
 
     # asset-clip 생성 (timeline 위치별)
     clip_lines = []
-    record_frames = 0  # spine은 연속이어야 하므로 프레임으로 누적한다.
+    # 타임라인 시작 TC — EDL(generate_edl)과 같은 상수를 같은 방식(프레임)으로 해석해
+    # 두 포맷의 컷 위치가 대칭이 되게 한다. spine 의 첫 offset 이 곧 tcStart 다.
+    tc_start_frames = timecode_to_frames(RECORD_START_TC + (";00" if drop_frame else ":00"), fps_int)[0]
+    record_frames = tc_start_frames  # spine은 연속이어야 하므로 프레임으로 누적한다.
     # (초로 누적하면 offset과 duration이 따로 반올림되어 1프레임 갭/겹침이 생긴다)
 
     for seg in segments:
@@ -159,9 +162,12 @@ def generate_fcpxml(
 
             record_frames += clip_frames
 
-    total_duration = _frames_str(record_frames, fps_int, ntsc)
+    total_duration = _frames_str(record_frames - tc_start_frames, fps_int, ntsc)
     safe_project = html.escape(project_name)
     frame_duration = f"1001/{fps_int * 1000}s" if ntsc else f"1/{fps_int}s"
+    tc_start = _frames_str(tc_start_frames, fps_int, ntsc)
+    if tc_start_frames == 0:
+        tc_start = "0s"
     rate_label = _NTSC_LABEL.get(fps_int, str(fps_int)) if ntsc else str(fps_int)
 
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -174,7 +180,7 @@ def generate_fcpxml(
   <library>
     <event name="{safe_project}">
       <project name="{safe_project}">
-        <sequence format="r1" duration="{total_duration}" tcStart="0s" tcFormat="{tc_format}" audioLayout="stereo" audioRate="48k">
+        <sequence format="r1" duration="{total_duration}" tcStart="{tc_start}" tcFormat="{tc_format}" audioLayout="stereo" audioRate="48k">
           <spine>
 {chr(10).join(clip_lines)}
           </spine>

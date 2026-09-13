@@ -13,6 +13,11 @@ export default function SettingsPanel(): JSX.Element {
   const updateSettings = useAutocutStore((s) => s.updateSettings)
   const handleStartAnalysis = async (resume = false, forceReanalyze = false): Promise<void> => {
     if (!folderPath) return
+    if (aiEngine === 'story' && !editingComment.trim()) {
+      // 시놉시스 없이 돌리면 수 시간짜리 분석 뒤에야 실패한다 — 시작 전에 막는다
+      setError('스토리 엔진은 시놉시스가 필요합니다 — 그날 무슨 일이 있었는지 순서대로 적어주세요 (3~10줄).')
+      return
+    }
     const msg = forceReanalyze ? '전체 재분석 준비 중...' : resume ? '이전 분석 재개 준비 중...' : '분석 준비 중...'
     setProgress('initializing', 0, msg)
     try {
@@ -20,7 +25,9 @@ export default function SettingsPanel(): JSX.Element {
         window_duration: 10,
         resume,
         force_reanalyze: forceReanalyze,
-        editing_comment: editingComment.trim() || undefined,
+        // 스토리 엔진은 같은 입력칸을 시놉시스(최대 2000자)로, 나머지는 편집 코멘트(500자)로 쓴다
+        editing_comment: aiEngine === 'story' ? undefined : editingComment.trim().slice(0, 500) || undefined,
+        synopsis: aiEngine === 'story' ? editingComment.trim() || undefined : undefined,
         ai_engine: aiEngine,
         target_minutes: targetMinutes || undefined
       })
@@ -40,17 +47,22 @@ export default function SettingsPanel(): JSX.Element {
 
   const canResume = resumeInfo?.canResume
   const hasCache = resumeInfo?.hasAnalysisCache
+  const isStory = aiEngine === 'story'
 
   return (
     <div className="settings-panel settings-panel--compact">
       <div className="settings-panel__row">
         <textarea
           className="settings-panel__comment-input"
-          placeholder="편집 코멘트 (선택) — 예: 요리 장면 위주로, 완성본 20분"
+          placeholder={
+            isStory
+              ? '시놉시스 (필수) — 그날 무슨 일이 있었는지 순서대로 3~10줄. 예: 에어펌프를 안 가져와서 입으로 불어 텐트를 세웠다 → 저녁 → 불멍 → 밤새 비 → 맑은 아침'
+              : '편집 코멘트 (선택) — 예: 요리 장면 위주로, 완성본 20분'
+          }
           value={editingComment}
           onChange={(e) => setEditingComment(e.target.value)}
-          rows={1}
-          maxLength={500}
+          rows={isStory ? 4 : 1}
+          maxLength={isStory ? 2000 : 500}
         />
         <div className="settings-panel__controls">
           <label className="settings-panel__target" title="완성본 목표 시간(분). 0이면 자동(50~70%).">
@@ -73,8 +85,9 @@ export default function SettingsPanel(): JSX.Element {
           <select
             className="settings-panel__engine-select"
             value={aiEngine}
-            onChange={(e) => setAiEngine(e.target.value as 'claude' | 'scored')}
+            onChange={(e) => setAiEngine(e.target.value as 'claude' | 'scored' | 'story')}
           >
+            <option value="story">스토리 (시놉시스 기반)</option>
             <option value="claude">Claude (1차 편집)</option>
             <option value="scored">Score 기반 (LLM 없음)</option>
           </select>

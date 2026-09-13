@@ -92,11 +92,11 @@ interface AppState {
   videoPlaying: boolean
   userPlayback: boolean
   editingComment: string
-  aiEngine: 'claude' | 'scored'
+  aiEngine: 'claude' | 'scored' | 'story'
 
   removeFile: (index: number) => void
   setEditingComment: (comment: string) => void
-  setAiEngine: (engine: 'claude' | 'scored') => void
+  setAiEngine: (engine: 'claude' | 'scored' | 'story') => void
   setFolder: (folderPath: string, files: FileInfo[], resumeInfo?: ResumeInfo | null) => void
   setResumeInfo: (resumeInfo: ResumeInfo | null) => void
   selectFile: (index: number) => void
@@ -154,7 +154,7 @@ const initialState = {
   videoPlaying: false,
   userPlayback: false,
   editingComment: localStorage.getItem('autocut:editingComment') || '',
-  aiEngine: (localStorage.getItem('autocut:aiEngine') || 'claude') as 'claude' | 'scored'
+  aiEngine: (localStorage.getItem('autocut:aiEngine') || 'claude') as 'claude' | 'scored' | 'story'
 }
 
 export const useAutocutStore = create<AppState>((set, get) => ({
@@ -246,7 +246,11 @@ export const useAutocutStore = create<AppState>((set, get) => ({
       if (containing >= 0) {
         segIdx = containing
       } else {
-        const next = keepSegments.findIndex((s) => s.globalStart > globalTime)
+        // 스토리 엔진 결과는 시간순이 아니므로(훅이 맨 앞) 첫 매치가 아니라 가장 이른 구간을 고른다
+        let next = -1
+        keepSegments.forEach((s, i) => {
+          if (s.globalStart > globalTime && (next < 0 || s.globalStart < keepSegments[next].globalStart)) next = i
+        })
         segIdx = next >= 0 ? next : keepSegments.length - 1
       }
     }

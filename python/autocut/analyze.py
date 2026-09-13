@@ -26,6 +26,7 @@ from edl_export import (generate_edl, resolve_edl_rate, resolve_tc_base,
                         timecode_to_frames, assign_reel_names, RECORD_START_TC)
 from fcpxml_export import generate_fcpxml
 from silence_trim import trim_silence_in_segments
+from story_editor import run_story_editing
 
 
 def log(msg: str):
@@ -288,7 +289,7 @@ def get_video_fps(path: str) -> float:
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "quiet", "-select_streams", "v",
-             "-show_entries", "stream=r_frame_rate:stream_disposition=attached_pic",
+             "-show_entries", "stream=r_frame_rate,avg_frame_rate:stream_disposition=attached_pic",
              "-of", "json", path],
             capture_output=True, text=True,
         )
@@ -297,16 +298,28 @@ def get_video_fps(path: str) -> float:
             # 90000/1 같은 값이라 그대로 쓰면 TC base가 붕괴한다.
             if stream.get("disposition", {}).get("attached_pic"):
                 continue
-            rate = (stream.get("r_frame_rate") or "").strip().rstrip(",")
-            if not rate:
-                continue
-            if "/" in rate:
-                num, den = rate.split("/", 1)
-                den = float(den)
-                if den > 0:
-                    return float(num) / den
-            else:
-                return float(rate)
+            def _parse(v: str) -> float:
+                v = (v or "").strip().rstrip(",")
+                if not v:
+                    return 0.0
+                if "/" in v:
+                    num, den = v.split("/", 1)
+                    return float(num) / float(den) if float(den) > 0 else 0.0
+                return float(v)
+            r = _parse(stream.get("r_frame_rate"))
+            avg = _parse(stream.get("avg_frame_rate"))
+            # VFR mp4(폰 화면녹화 등)는 r_frame_rate 가 1000/1 로 나온다. 그때는
+            # 실제 평균 레이트를 쓴다. 120 초과는 실재하는 촬영 레이트가 아니다.
+            if r > 120 and 0 < avg <= 120:
+                # 평균 레이트는 29.4 같은 비표준 값이라 그대로 쓰면 존재하지 않는
+                # 29fps base 로 EDL 이 만들어진다. 표준 레이트에 스냅하고, 안 되면
+                # 0 을 돌려 "fps 감지 실패" 경고 경로로 보낸다.
+                for std in (23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 120.0):
+                    if abs(avg - std) <= 0.5:
+                        return {23.976: 24000 / 1001, 29.97: 30000 / 1001, 59.94: 60000 / 1001}.get(std, std)
+                return 0.0
+            if r > 0:
+                return r
         return 0.0
     except Exception:
         return 0.0
@@ -378,6 +391,10 @@ def get_video_start_tc(path: str, fps: float | None = None) -> tuple[float, bool
             fps = get_video_fps(path)
         fps = fps or 24.0
         fps_int, actual_fps = resolve_tc_base(fps)
+        if abs(actual_fps - fps_int) < 0.001:
+            # 정수 레이트에는 drop frame 이 없다. ';' 표기가 있어도 NDF 로 읽어야
+            # EDL 인코더(resolve_edl_drop_frame)와 같은 축을 쓴다.
+            tc = tc.replace(";", ":")
         frames, drop_frame = timecode_to_frames(tc, fps_int)
         return frames / actual_fps, drop_frame
     except Exception:
@@ -510,8 +527,14 @@ def main():
     resume = bool(options.get("resume", False))
     force_reanalyze = bool(options.get("force_reanalyze", False))
     editing_comment = str(options.get("editing_comment", "")).strip()
-    ai_engine = str(options.get("ai_engine", "ollama"))  # "ollama" | "claude"
+    synopsis = str(options.get("synopsis") or editing_comment).strip()
+    ai_engine = str(options.get("ai_engine", "ollama"))  # "claude" | "scored" | "story"
     target_minutes = int(options.get("target_minutes", 0))
+
+    if ai_engine == "story" and not synopsis:
+        # 수 시간짜리 Stage 1/2 를 돌린 뒤에 실패하지 않도록 맨 앞에서 거른다
+        emit({"type": "error", "message": "스토리 엔진은 시놉시스가 필요합니다 — 편집 코멘트 칸에 그날 무슨 일이 있었는지 순서대로 적어주세요 (3~10줄)."})
+        return
 
     log(f"시작: folder={folder_path}")
     log(f"옵션: window={window_duration}s, skip_vision={skip_vision}, resume={resume}, force_reanalyze={force_reanalyze}, ai_engine={ai_engine}")
@@ -524,8 +547,8 @@ def main():
         PIPELINE_VERSION = "storyboard_v3_scored"
         log("AI 엔진: Scored (알고리즘)")
     else:
-        PIPELINE_VERSION = "storyboard_v3_claude"
-        log("AI 엔진: Claude (하이브리드)")
+        PIPELINE_VERSION = "storyboard_v3_claude"  # story 도 같은 Stage 1/2 데이터를 쓴다
+        log("AI 엔진: Story (시놉시스 기반)" if ai_engine == "story" else "AI 엔진: Claude (하이브리드)")
 
     t_start = time.time()
 
@@ -599,12 +622,20 @@ def main():
 
             # Phase C: 내러티브 편집
             log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면 (캐시, engine={ai_engine})")
+            story_plan, story_md = None, ""
             if ai_engine == "scored":
                 keep_segments = run_scored_editing(
                     usable_scenes, all_window_data, cached_duration,
                     progress_callback=progress,
                     editing_comment=editing_comment,
                     target_minutes=target_minutes,
+                )
+            elif ai_engine == "story":
+                keep_segments, story_plan, story_md = run_story_editing(
+                    scenes, all_window_data, cached_duration, files, cached_speech or [],
+                    folder_path, synopsis, target_minutes,
+                    progress_callback=progress,
+                    relook_dir=os.path.join(get_autocut_dir(folder_path), "relook"),
                 )
             else:  # claude (기본값) — 하이브리드
                 keep_segments = run_hybrid_editing(
@@ -618,11 +649,17 @@ def main():
 
             # 후처리
             progress("merging", 95, "KEEP 구간 병합 중...")
-            merged = merge_adjacent_segments(keep_segments)
-            validated = validate_segments(merged)
+            # 스토리 모드는 순서(훅)와 몽타주 리듬을 지켜야 하므로 병합·정렬을 건너뛴다
+            if ai_engine == "story":
+                validated = keep_segments
+            else:
+                merged = merge_adjacent_segments(keep_segments)
+                validated = validate_segments(merged)
+                log(f"병합·검증 후: {len(validated)}개")
 
             # 침묵 trim — STT timing이 캐시에 있으면 1초+ 침묵을 1초로 압축
-            if cached_speech:
+            # 스토리 모드는 건너뛴다 — 몽타주 컷이 발화 갭에서 1초 조각으로 쪼개져 리듬이 깨진다
+            if cached_speech and ai_engine != "story":
                 validated = trim_silence_in_segments(validated, cached_speech)
 
             anchor = {
@@ -644,6 +681,8 @@ def main():
                     n += 1
                 srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
             write_srt(validated, srt_path)
+            if story_plan is not None:
+                _save_story_plan(srt_path, story_plan, story_md)
 
             # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
             edl_path = None
@@ -845,7 +884,7 @@ def main():
             # 5. 모든 윈도우 처리 (태깅 + 스토리보드 데이터 수집)
             # Claude 배치 비전 태깅 사전 처리
             claude_tag_results = {}
-            if ai_engine == "claude" and not skip_vision:
+            if ai_engine in ("claude", "story") and not skip_vision:  # story 는 claude 와 같은 Stage 2
                 vision_batch = []
                 vision_wi_map = {}
                 for _wi, _w in enumerate(windows):
@@ -950,7 +989,7 @@ def main():
                 elif not skip_vision:
                     # Stage 2 비전 태깅
                     stage2_count += 1
-                    if ai_engine == "claude":
+                    if ai_engine in ("claude", "story"):
                         # Claude 배치 결과 조회
                         if wi in claude_tag_results:
                             label, shot, desc, usable, usable_reason = claude_tag_results[wi]
@@ -1047,12 +1086,20 @@ def main():
 
         # 7. Phase C: 내러티브 편집
         log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면, {len(all_window_data)}개 윈도우 (engine={ai_engine})")
+        story_plan, story_md = None, ""
         if ai_engine == "scored":
             keep_segments = run_scored_editing(
                 usable_scenes, all_window_data, total_duration,
                 progress_callback=progress,
                 editing_comment=editing_comment,
                 target_minutes=target_minutes,
+            )
+        elif ai_engine == "story":
+            keep_segments, story_plan, story_md = run_story_editing(
+                scenes, all_window_data, total_duration, files, all_speech_segments or [],
+                folder_path, synopsis, target_minutes,
+                progress_callback=progress,
+                relook_dir=os.path.join(get_autocut_dir(folder_path), "relook"),
             )
         else:  # claude (기본값) — 하이브리드
             keep_segments = run_hybrid_editing(
@@ -1066,13 +1113,17 @@ def main():
 
         # 7. 후처리: 병합 + 검증
         progress("merging", 95, "KEEP 구간 병합 중...")
-        merged = merge_adjacent_segments(keep_segments)
-        log(f"병합 후: {len(merged)}개")
-        validated = validate_segments(merged)
-        log(f"검증 후: {len(validated)}개")
+        # 스토리 모드는 순서(훅)와 몽타주 리듬을 지켜야 하므로 병합·정렬을 건너뛴다
+        if ai_engine == "story":
+            validated = keep_segments
+        else:
+            merged = merge_adjacent_segments(keep_segments)
+            validated = validate_segments(merged)
+            log(f"병합·검증 후: {len(validated)}개")
 
         # 침묵 trim — 1초+ 침묵을 1초로 압축
-        if all_speech_segments:
+        # 스토리 모드는 건너뛴다 — 몽타주 컷이 발화 갭에서 1초 조각으로 쪼개져 리듬이 깨진다
+        if all_speech_segments and ai_engine != "story":
             before = len(validated)
             validated = trim_silence_in_segments(validated, all_speech_segments)
             log(f"침묵 trim 후: {before}개 → {len(validated)}개")
@@ -1102,6 +1153,8 @@ def main():
                 n += 1
             srt_path = os.path.join(autocut_dir, f"{folder_name}_{n}.srt")
         write_srt(validated, srt_path)
+        if story_plan is not None:
+            _save_story_plan(srt_path, story_plan, story_md)
 
         # EDL 생성 (원본 실제 fps/드롭프레임 + 임베디드 시작 TC 기준 — 다빈치 offline 방지)
         edl_path = None
@@ -1162,6 +1215,16 @@ def format_srt_time(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _save_story_plan(srt_path: str, plan: dict, md: str):
+    """스토리 설계를 SRT 와 같은 이름으로 저장 (_story.json / _story.md)"""
+    stem = srt_path[:-4] if srt_path.endswith(".srt") else srt_path
+    with open(stem + "_story.json", "w", encoding="utf-8") as f:
+        json.dump(plan, f, ensure_ascii=False, indent=2)
+    with open(stem + "_story.md", "w", encoding="utf-8") as f:
+        f.write(md)
+    log(f"스토리 설계 저장: {stem}_story.md")
 
 
 def write_srt(segments: list[dict], output_path: str):
