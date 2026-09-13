@@ -27,7 +27,6 @@ from story_planner import plan_story_from_data, render_markdown
 ROLE_KO = {
     "hook": "훅", "setup": "설정", "complication": "사건", "attempt": "시도",
     "payoff": "보상", "breather": "숨", "montage": "몽타주", "talk": "멘트",
-    "cutaway": "컷어웨이",
 }
 # 예산 초과 시 이 순서로 뺀다 (앞일수록 먼저)
 DROP_PRIORITY = ["breather", "montage", "setup", "attempt", "talk", "complication", "payoff"]
@@ -38,13 +37,17 @@ MONTAGE_SWING = 0.3     # 몽타주 안에서 긴 컷/짧은 컷을 번갈아 (�
 SPAN_MIN = 3.5         # 연속 구간 컷 하나의 최소 길이
 MIN_CUT = 2.0          # validate_segments 와 같은 하한
 
-# 시각 다양성 — 같은 테이크·같은 화각이 이어지면 지루하다
+# 반복 억제 — 같은 테이크·같은 화각이 이어지면 지루하다.
+# 변화를 만들어 넣지(줌·컷어웨이) 않는다. 같은 그림이 이어지면 핵심 컷만 짧게 남기고
+# 나머지는 버린다. 결과가 짧아지면 그게 맞다.
 SAME_TAKE_GAP = 60.0   # 같은 파일에서 이 간격(초) 안이면 같은 테이크로 본다
-RUN_MAX = 10.0         # 같은 테이크가 이만큼 이어지면 끊는다
-CUTAWAY_LEN = 2.5      # 끼워 넣는 컷어웨이 길이
-CUTAWAY_RADIUS = 180.0 # 컷어웨이 후보를 찾는 시간 반경(초)
-PUNCH_IN = {"wide": 1.3, "closeup": 1.2}  # 화각별 펀치인 배율 (4K 소스 기준 1.3×도 1080p 이상)
-SPLIT_MIN = 12.0       # 이보다 긴 단일 컷은 반으로 갈라 뒤쪽을 펀치인
+CUT_MAX_IN_RUN = 8.0   # 같은 테이크 안에서 컷 하나의 상한 (멘트는 예외 — 문장을 자르지 않는다)
+RUN_SOFT_MAX = 30.0    # 같은 테이크가 이보다 길면 '반복' 역할의 컷부터 뺀다. 사건은 빼지 않는다
+# 서로 다른 순간 — 같은 앵글이어도 전부 남긴다 (한 앵글에 중요한 장면이 여럿일 수 있다)
+EVENT_ROLES = {"hook", "complication", "attempt", "payoff", "talk"}
+# 같은 행동을 여러 번 보여주는 역할 — 같은 테이크에서는 비트당 1컷이면 충분하다
+REPEAT_ROLES = {"montage", "breather", "setup"}
+REPEAT_DROP_ORDER = ["breather", "setup", "montage"]   # 그래도 길면 이 순서로 뺀다
 ANCHOR_SEC = 1.0       # analyze.py 의 '편집 시작점' 앵커(0~1초)와 겹치지 않게 비워 두는 구간
 SEAM = 0.8             # 윈도우 경계에서 비켜 서는 여유
 TOLERANCE = 1.07     # 목표의 7%까지 허용
@@ -279,13 +282,14 @@ def _make_segment(seg_id: int, w: dict, wid: int, s: float, e: float,
         "has_speech": window_has_speech(w),
         "desc": w.get("desc", ""),
         "reason": reason,
-        "hint": "",          # "crop"(펀치인) / "insert"(컷어웨이) — format_srt_label 이 태그로 표시
+        "hint": "",
         "scene_id": scene.get("id"),
         "scene_action": scene.get("action", ""),
         "window_id": wid,
         "beat_id": beat.get("id"),
         "role": role,
         "act": act,
+        "must_have": bool(beat.get("must_have")),
     }
 
 
@@ -348,37 +352,18 @@ def _same_take(a: dict, b: dict, windows: list[dict], file_of) -> bool:
             and wa.get("shot") == wb.get("shot"))
 
 
-def _find_cutaway(near_t: float, shot: str, windows: list[dict], used_ranges, used_wids: set) -> int | None:
-    """근처(±CUTAWAY_RADIUS)에서 다른 화각·미사용·품질 양호 윈도우 하나. 가까운 것 우선."""
-    best = None
-    for i, w in enumerate(windows):
-        if i in used_wids or w.get("usable") != "yes" or w.get("shot") == shot:
-            continue
-        if w["globalEnd"] - w["globalStart"] < CUTAWAY_LEN + 2 * SEAM:   # 꼬리 윈도우는 못 쓴다
-            continue
-        if w.get("label") in ("dark", "driving", "no_frame", "unknown"):
-            continue
-        dt = abs(w["globalStart"] - near_t)
-        if dt > CUTAWAY_RADIUS:
-            continue
-        s, e = _mid_cut(w, CUTAWAY_LEN)
-        if any(min(e, b) - max(s, a) > 0 for a, b in used_ranges):
-            continue
-        score = dt - 60 * float(w.get("motion") or 0)   # 가깝고 움직임 있는 쪽
-        if best is None or score < best[0]:
-            best = (score, i)
-    return best[1] if best else None
+def dedupe_repetition(segments: list[dict], windows: list[dict], files: list[dict]) -> list[dict]:
+    """같은 테이크·같은 화각에서 '같은 행동의 반복'이 이어지지 않게 한다.
 
-
-def add_variety(segments: list[dict], windows: list[dict], files: list[dict], scene_of: dict) -> list[dict]:
-    """같은 테이크·같은 화각이 RUN_MAX 초 넘게 이어지면 끊는다.
-
-    사람 편집자가 하는 두 가지를 코드로 옮긴 것이다.
-      1) 컷어웨이 — 근처에 다른 화각 그림이 있으면 2.5초 끼워 넣는다
-      2) 펀치인  — 없으면(삼각대 원테이크) 연속 컷을 1.0× / 1.3× 로 번갈아 확대한다.
-         FCPXML 은 adjust-transform 으로 실제 줌이 들어가고, EDL/SRT 는 '크롭' 표시만 남는다.
-    12초 넘는 단일 컷은 반으로 갈라 뒤쪽을 펀치인한다(점프컷+리프레임).
-    총 길이는 컷어웨이만큼 앞 컷을 줄여 지킨다. 멘트 컷 안에는 컷어웨이를 넣지 않는다(음성 끊김).
+    변화를 만들어 넣지(줌·컷어웨이) 않고, 반복만 줄인다.
+      1) 같은 테이크 안의 컷은 CUT_MAX_IN_RUN 초로 줄인다 (보상은 끝, 나머지는 앞을 남김. 멘트는 예외)
+      2) 몽타주·숨·설정(REPEAT_ROLES)은 같은 테이크에서 비트당 1컷만 남긴다 — 같은 앵글로
+         "또 던지고, 또 펼치고"를 일곱 번 보여줄 이유가 없다
+      3) 사건·시도·보상·멘트·훅(EVENT_ROLES)은 같은 앵글이어도 전부 남긴다 — 한 앵글에
+         중요한 순간이 여럿일 수 있다(주저앉음 → 안으로 들어감 → 다시 선다)
+      4) 그래도 RUN_SOFT_MAX 를 넘으면 필수가 아닌 반복 역할 컷을 숨 → 설정 → 몽타주 순으로 뺀다.
+         사건과 필수 비트는 어떤 경우에도 빼지 않고, 어떤 비트도 통째로 사라지지 않는다(컷 1개는 남긴다).
+         그래도 넘으면 그대로 둔다 — 한 앵글에 중요한 순간이 여럿이면 길어도 맞다.
     """
     if not segments:
         return segments
@@ -387,23 +372,6 @@ def add_variety(segments: list[dict], windows: list[dict], files: list[dict], sc
     def file_of(t):
         return next((i for i, (a, b) in enumerate(bounds) if a <= t < b), -1)
 
-    # 1) 긴 단일 컷은 반으로 — 뒤쪽 펀치인
-    split = []
-    for seg in segments:
-        ln = seg["globalEnd"] - seg["globalStart"]
-        shot = windows[seg["window_id"]].get("shot", "wide")
-        if ln >= SPLIT_MIN and seg.get("role") != "hook":
-            mid = round((seg["globalStart"] + seg["globalEnd"]) / 2, 3)
-            a, b = dict(seg), dict(seg)
-            a["globalEnd"] = mid
-            b["globalStart"] = mid
-            b["hint"], b["zoom"] = "crop", PUNCH_IN.get(shot, 1.25)
-            split += [a, b]
-        else:
-            split.append(seg)
-    segments = split
-
-    # 2) 같은 테이크 런 찾기
     runs, cur = [], [0]
     for i in range(1, len(segments)):
         if _same_take(segments[i - 1], segments[i], windows, file_of):
@@ -412,58 +380,53 @@ def add_variety(segments: list[dict], windows: list[dict], files: list[dict], sc
             runs.append(cur); cur = [i]
     runs.append(cur)
 
-    used_ranges = [(x["globalStart"], x["globalEnd"]) for x in segments]
-    used_wids = {x["window_id"] for x in segments}
-    inserts: dict[int, dict] = {}   # 이 인덱스 '뒤'에 끼울 컷어웨이
-    n_cut = n_punch = 0
-
+    drop: set[int] = set()
+    n_trim = n_rep = n_over = 0
     for run in runs:
-        dur = sum(segments[i]["globalEnd"] - segments[i]["globalStart"] for i in run)
-        if dur <= RUN_MAX or len(run) < 2:
+        if len(run) < 2:
             continue
-        shot = windows[segments[run[0]]["window_id"]].get("shot", "wide")
-        acc, toggle = 0.0, False
-        for k, i in enumerate(run):
+        # 1) 컷 상한
+        for i in run:
             seg = segments[i]
-            acc += seg["globalEnd"] - seg["globalStart"]
-            if k == len(run) - 1 or acc < RUN_MAX * 0.8:
-                continue
-            # 여기서 끊는다: 컷어웨이 → 없으면 다음 컷 펀치인
-            wid = None
-            if seg.get("role") != "talk":
-                wid = _find_cutaway(seg["globalEnd"], shot, windows, used_ranges, used_wids)
-            if wid is not None:
-                w = windows[wid]
-                cs, ce = _mid_cut(w, CUTAWAY_LEN)
-                cut = _make_segment(0, w, wid, cs, ce,
-                                    {"id": "CUTAWAY", "role": "cutaway",
-                                     "intent": w.get("desc", "")[:40]},
-                                    seg.get("act", ""), scene_of)
-                cut["hint"] = "insert"
-                inserts[i] = cut
-                used_ranges.append((cs, ce)); used_wids.add(wid)
-                # 총 길이 보전 — 끼운 만큼 앞 컷을 줄인다
-                if seg["globalEnd"] - seg["globalStart"] - CUTAWAY_LEN >= MIN_CUT:
-                    seg["globalEnd"] = round(seg["globalEnd"] - CUTAWAY_LEN, 3)
-                n_cut += 1
-            else:
-                nxt = segments[run[k + 1]]
-                toggle = not toggle
-                if toggle and not nxt.get("zoom"):
-                    nxt["hint"], nxt["zoom"] = "crop", PUNCH_IN.get(shot, 1.25)
-                    n_punch += 1
-            acc = 0.0
+            ln = seg["globalEnd"] - seg["globalStart"]
+            if seg.get("role") != "talk" and ln > CUT_MAX_IN_RUN:
+                if seg.get("role") == "payoff":
+                    seg["globalStart"] = round(seg["globalEnd"] - CUT_MAX_IN_RUN, 3)
+                else:
+                    seg["globalEnd"] = round(seg["globalStart"] + CUT_MAX_IN_RUN, 3)
+                n_trim += 1
+        # 2) 반복 역할은 비트당 1컷
+        seen_beats: set = set()
+        for i in run:
+            seg = segments[i]
+            if seg.get("role") in REPEAT_ROLES:
+                key = seg.get("beat_id")
+                if key in seen_beats:
+                    drop.add(i); n_rep += 1
+                else:
+                    seen_beats.add(key)
+        # 4) 그래도 길면 필수 아닌 반복 역할부터
+        def total():
+            return sum(segments[i]["globalEnd"] - segments[i]["globalStart"] for i in run if i not in drop)
+        def beat_alive(bid):
+            return sum(1 for j in run if j not in drop and segments[j].get("beat_id") == bid)
 
-    out = []
-    for i, seg in enumerate(segments):
-        out.append(seg)
-        if i in inserts:
-            out.append(inserts[i])
+        for role in REPEAT_DROP_ORDER:
+            for i in reversed(run):                       # 뒤쪽(덜 새로운 것)부터
+                if total() <= RUN_SOFT_MAX:
+                    break
+                seg = segments[i]
+                if i in drop or seg.get("must_have") or seg.get("role") != role:
+                    continue
+                if beat_alive(seg.get("beat_id")) <= 1:   # 비트가 통째로 사라지지는 않게 — 컷 하나는 남긴다
+                    continue
+                drop.add(i); n_over += 1
+
+    out = [dict(seg) for i, seg in enumerate(segments) if i not in drop]
     for i, seg in enumerate(out):
         seg["id"] = i
-    n_split = sum(1 for x in split if x.get("zoom") and x.get("hint") == "crop") - n_punch
-    _log(f"다양성: 같은 테이크 런 {sum(1 for r in runs if len(r) >= 2)}개 → "
-         f"컷어웨이 {n_cut}개 삽입, 펀치인 {n_punch}개, 긴 컷 분할 펀치인 {max(n_split, 0)}개")
+    _log(f"반복 억제: 같은 테이크 런 {sum(1 for r in runs if len(r) >= 2)}개 → "
+         f"컷 {n_trim}개 축소, 반복 컷 {n_rep}개 제거, 길이 초과로 {n_over}개 제거 (사건·필수 비트는 유지)")
     return out
 
 
@@ -499,7 +462,7 @@ def assemble(plan: dict, windows: list[dict], scenes: list[dict],
         for wid, s, e in x["cuts"]:
             segments.append(_make_segment(len(segments), windows[wid], wid, s, e, x["beat"], x["act"], scene_of))
     segments = _validate_in_order(segments)
-    segments = add_variety(segments, windows, files or [], scene_of)
+    segments = dedupe_repetition(segments, windows, files or [])
 
     total = sum(s["globalEnd"] - s["globalStart"] for s in segments)
     lens = sorted(s["globalEnd"] - s["globalStart"] for s in segments)

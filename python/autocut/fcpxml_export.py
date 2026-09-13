@@ -158,13 +158,6 @@ def generate_fcpxml(
                 clip_lines.append(
                     f'          <note>{html.escape(note)}</note>'
                 )
-            # 펀치인(디지털 줌) — 스토리 편집이 같은 앵글 연속 컷에 붙인다.
-            # 다빈치가 import 시 Transform 으로 반영한다. (EDL 은 표현 불가)
-            zoom = seg.get("zoom")
-            if zoom and float(zoom) > 1.0:
-                clip_lines.append(
-                    f'          <adjust-transform scale="{float(zoom):.2f} {float(zoom):.2f}"/>'
-                )
             clip_lines.append(f'        </asset-clip>')
 
             record_frames += clip_frames
