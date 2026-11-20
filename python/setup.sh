@@ -61,7 +61,7 @@ else
     info "shared-venv 생성 완료"
 fi
 
-# ─── bgm-venv (bgm-studio) ───────────────────────────────────
+# ─── bgm-venv (BGM 추천: 음악 라이브러리 분석·검색) ───────────────────────────────────
 
 if [ -d "bgm-venv" ]; then
     warn "bgm-venv가 이미 존재합니다. 건너뜁니다. (재생성: rm -rf bgm-venv 후 재실행)"
@@ -82,6 +82,5 @@ echo "  # ai-movie-cut (비전 태깅 + 편집 추론)"
 echo "  ollama pull qwen2.5vl:7b"
 echo "  ollama pull exaone3.5:7.8b"
 echo ""
-echo "  # bgm-studio (음악 생성용, 필요 시)"
-echo "  ollama pull gemma3:27b"
+echo "  # BGM 추천은 Ollama 를 쓰지 않습니다 (Claude CLI + CLAP/AST 모델은 처음 실행 때 자동으로 받음)"
 echo ""

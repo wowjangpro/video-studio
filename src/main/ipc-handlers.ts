@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'url'
 import { ipcMain, BrowserWindow } from 'electron'
 import { checkHealth } from './services/health-check'
 import { resourceManager } from './services/resource-manager'
@@ -32,7 +33,8 @@ export function registerIpcHandlers(): void {
 
   // 공통: 미디어 URL
   ipcMain.handle('get-media-url', async (_event, filePath: string) => {
-    return 'file://' + filePath
+    // 경로의 #, ?, 공백이 URL 로 오해되지 않게 인코딩한다
+    return pathToFileURL(filePath).href
   })
 
   // 모듈별 IPC 등록

@@ -13,7 +13,7 @@ interface ModuleResources {
 const MODULE_GPU_REQUIREMENTS: Record<ModuleName, number> = {
   autocut: 21,  // qwen2.5vl:7b + qwen3:14b
   subtitle: 14, // qwen2.5:14b
-  bgm: 25       // llama3.2-vision:11b + qwen2.5:14b
+  bgm: 0        // 추천은 Claude + CLAP(MPS) 만 쓴다 — Ollama 를 쓰지 않음
 }
 
 const GPU_MEMORY_LIMIT = 32 // Apple Silicon 통합 메모리
@@ -49,7 +49,7 @@ class ResourceManager {
       const moduleNames: Record<ModuleName, string> = {
         autocut: 'AI 편집',
         subtitle: '자막 추출',
-        bgm: 'BGM 생성'
+        bgm: 'BGM 추천'
       }
       const runningNames = currentModules.map((m) => moduleNames[m]).join(', ')
       return {

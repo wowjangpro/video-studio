@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // ── 공통 타입 ──
 export interface ProgressData {
@@ -67,11 +67,105 @@ export interface ChunkProgressData {
   chunkEnd: number
 }
 
+// ── BGM 음악 라이브러리 타입 ──
+export interface LibraryTrack {
+  id: string
+  title: string
+  artist: string | null
+  genre: string | null
+  mood: string | null
+  instruments: string | null
+  durationSec: number | null
+  licenseType: 'attribution_required' | 'attribution_not_required' | null
+  attributionText: string | null
+  /** 음원 파일 절대 경로 (파일이 없으면 null) */
+  audioPath: string | null
+  bpm: number | null
+  hasVocals: boolean | null
+  analyzed: boolean
+}
+
+export interface LibraryInfo {
+  root: string
+  formatVersion: number
+  createdAt: string | null
+  trackCount: number
+  downloadedCount: number
+  analyzedCount: number
+}
+
+export type BgmResult<T> = { ok: true; data: T } | { ok: false; message: string }
+
+export interface MusicCriteria {
+  scene_description: string
+  music_queries: string[]
+  energy: 'low' | 'medium' | 'high'
+  bpm_min: number | null
+  bpm_max: number | null
+  vocals_ok: boolean
+  genres: string[]
+  moods: string[]
+}
+
+export interface RecommendedTrack {
+  id: string
+  title: string
+  artist: string | null
+  genre: string | null
+  mood: string | null
+  durationSec: number
+  /** 곡 안에서 이 구간에 쓸 시작 지점 (초) */
+  offsetSec: number
+  score: number
+  similarity: number
+  bpm: number | null
+  hasVocals: boolean
+  licenseType: 'attribution_required' | 'attribution_not_required' | null
+  attributionText: string | null
+  audioPath: string | null
+  reasons: string[]
+}
+
+export interface RecommendData {
+  criteria: MusicCriteria
+  tracks: RecommendedTrack[]
+  durationSec: number
+}
+
+export interface BgmCue {
+  cueId: string
+  trackId: string
+  title: string
+  artist: string | null
+  audioRel: string
+  audioPath: string | null
+  rangeStart: number
+  rangeEnd: number
+  offsetSec: number
+  licenseType: string | null
+  attributionText: string | null
+  addedAt: string
+}
+
+export interface BgmExportData {
+  fcpxmlPath: string
+  creditsPath: string
+  credits: string
+}
+
+export type LibraryOpenResult =
+  | { status: 'ok'; info: LibraryInfo; tracks: LibraryTrack[] }
+  | { status: 'not_library'; root: string; empty: boolean }
+  | { status: 'canceled' }
+  | { status: 'error'; message: string }
+
 // ── 공통 API ──
 const common = {
   checkHealth: (): Promise<HealthStatus> => ipcRenderer.invoke('check-health'),
   getResourceStatus: (): Promise<{ activeModules: string[] }> => ipcRenderer.invoke('get-resource-status'),
   getMediaUrl: (filePath: string): Promise<string> => ipcRenderer.invoke('get-media-url', filePath),
+  /** 드래그로 놓은 파일의 실제 경로 (Electron 32 부터 File.path 가 없어졌다) */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
   onResourceStatus: (callback: (status: Record<string, boolean>) => void) => {
     const handler = (_: unknown, status: Record<string, boolean>): void => callback(status)
@@ -227,31 +321,26 @@ const subtitle = {
 // ── BGM API ──
 const bgm = {
   selectFile: (): Promise<string | null> => ipcRenderer.invoke('bgm:select-file'),
-  analyzeVideo: (filePath: string, rangeStart: number, rangeEnd: number, preference: string, aiEngine?: string): Promise<void> =>
-    ipcRenderer.invoke('bgm:analyze-video', filePath, rangeStart, rangeEnd, preference, aiEngine),
-  generateBgm: (filePath: string, rangeStart: number, rangeEnd: number, prompt: string, count: number): Promise<void> =>
-    ipcRenderer.invoke('bgm:generate-bgm', filePath, rangeStart, rangeEnd, prompt, count),
-  cancelGenerate: (): Promise<void> => ipcRenderer.invoke('bgm:cancel-generate'),
+  selectLibrary: (): Promise<LibraryOpenResult> => ipcRenderer.invoke('bgm:library-select'),
+  openLibrary: (root: string): Promise<LibraryOpenResult> => ipcRenderer.invoke('bgm:library-open', root),
+
+  /** 구간에 어울리는 곡 추천 (진행 상황은 onProgress) */
+  recommend: (root: string, video: string, start: number, end: number, preference: string, usedTrackIds: string[] = []): Promise<BgmResult<RecommendData>> =>
+    ipcRenderer.invoke('bgm:recommend', root, video, start, end, preference, usedTrackIds),
+  cancel: (): Promise<void> => ipcRenderer.invoke('bgm:cancel'),
+
+  cues: (root: string, video: string): Promise<BgmResult<BgmCue[]>> => ipcRenderer.invoke('bgm:cues', root, video),
+  addCue: (root: string, video: string, cue: { trackId: string; rangeStart: number; rangeEnd: number; offsetSec: number }): Promise<BgmResult<BgmCue[]>> =>
+    ipcRenderer.invoke('bgm:add-cue', root, video, cue),
+  removeCue: (root: string, video: string, cueId: string): Promise<BgmResult<BgmCue[]>> =>
+    ipcRenderer.invoke('bgm:remove-cue', root, video, cueId),
+  exportDavinci: (root: string, video: string): Promise<BgmResult<BgmExportData>> => ipcRenderer.invoke('bgm:export', root, video),
+  reveal: (path: string): Promise<void> => ipcRenderer.invoke('bgm:reveal', path),
 
   onProgress: (callback: (data: ProgressData) => void) => {
     const handler = (_: unknown, data: ProgressData): void => callback(data)
     ipcRenderer.on('bgm:progress', handler)
     return (): void => { ipcRenderer.removeListener('bgm:progress', handler) }
-  },
-  onAnalyzeComplete: (callback: (sceneDescription: string, musicPrompt: string) => void) => {
-    const handler = (_: unknown, desc: string, prompt: string): void => callback(desc, prompt)
-    ipcRenderer.on('bgm:analyze-complete', handler)
-    return (): void => { ipcRenderer.removeListener('bgm:analyze-complete', handler) }
-  },
-  onGenerateComplete: (callback: (bgmPaths: string[]) => void) => {
-    const handler = (_: unknown, bgmPaths: string[]): void => callback(bgmPaths)
-    ipcRenderer.on('bgm:generate-complete', handler)
-    return (): void => { ipcRenderer.removeListener('bgm:generate-complete', handler) }
-  },
-  onError: (callback: (message: string) => void) => {
-    const handler = (_: unknown, message: string): void => callback(message)
-    ipcRenderer.on('bgm:error', handler)
-    return (): void => { ipcRenderer.removeListener('bgm:error', handler) }
   }
 }
 

@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect, useState } from 'react'
-import { useBgmStore } from './bgm-store'
+import { useBgmStore, MAX_RANGE_SEC } from './bgm-store'
+import { player } from './preview'
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -65,7 +66,7 @@ export default function VideoPlayer(): JSX.Element {
       const handleMouseMove = (ev: MouseEvent): void => {
         const time = positionToTime(ev.clientX)
         const minGap = 1
-        const maxRange = 180
+        const maxRange = MAX_RANGE_SEC
 
         if (draggingRef.current === 'start') {
           const clamped = Math.max(0, Math.min(time, rangeEnd - minGap))
@@ -108,7 +109,7 @@ export default function VideoPlayer(): JSX.Element {
       const step = e.shiftKey ? 1 : 0.1
       const dir = e.key === 'ArrowRight' ? step : -step
       const minGap = 1
-      const maxRange = 180
+      const maxRange = MAX_RANGE_SEC
 
       if (activeHandle === 'start') {
         const newStart = Math.max(0, Math.min(rangeStart + dir, rangeEnd - minGap))
@@ -128,6 +129,14 @@ export default function VideoPlayer(): JSX.Element {
   useEffect(() => {
     return () => {
       draggingRef.current = null
+    }
+  }, [])
+
+  // 미리듣기가 영상과 함께 재생할 수 있게 <video> 를 등록한다
+  useEffect(() => {
+    player.video = videoRef.current
+    return () => {
+      if (player.video === videoRef.current) player.video = null
     }
   }, [])
 

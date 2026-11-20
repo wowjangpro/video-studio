@@ -1,9 +1,0 @@
-torch>=2.0
-torchaudio
-transformers
-audiocraft
-librosa
-soundfile
-moviepy
-httpx
-Pillow

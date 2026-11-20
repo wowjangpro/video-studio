@@ -11,7 +11,7 @@ export function FileDropZone(): JSX.Element {
       setIsDragging(false)
       const file = e.dataTransfer.files[0]
       if (file) {
-        setFile(file.path)
+        setFile(window.electronAPI.getPathForFile(file))
       }
     },
     [setFile]

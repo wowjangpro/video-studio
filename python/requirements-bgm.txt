@@ -1,10 +1,13 @@
-# bgm-studio 전용 의존성
+# BGM 추천(음악 라이브러리) 전용 의존성
+# - library_analyze.py: CLAP(laion/larger_clap_general) 임베딩 + AST(AudioSet) 보컬·태그 + librosa 특징
+# - recommend.py / analyze_claude.py: Claude CLI 장면 분석(프레임 추출에 moviepy·Pillow)
+# 주의: 이 환경의 numba 가 numpy 와 맞지 않으면 librosa 의 beat_track·onset_detect·chroma_* 가
+#       프로세스를 죽인다 → 분석 코드는 그 함수들을 쓰지 않는다.
 torch>=2.0
-torchaudio
-transformers>=4.57.0,<4.58.0
-audiocraft
+transformers>=4.46,<4.58
 librosa
 soundfile
+scipy
+numpy
 moviepy
-httpx
 Pillow
