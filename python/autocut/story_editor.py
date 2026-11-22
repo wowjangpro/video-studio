@@ -487,6 +487,7 @@ def run_story_editing(
     target_minutes: int,
     progress_callback=None,
     relook_dir: str | None = None,
+    length_as_max: bool = False,
 ) -> tuple[list[dict], dict, str]:
     """스토리 설계 → 캐스팅 → 조립. (세그먼트, 설계 JSON, 설계 마크다운) 반환"""
     if not synopsis or not synopsis.strip():
@@ -499,7 +500,7 @@ def run_story_editing(
         progress_callback("editing", 81, "스토리 설계 중 (Claude)...")
     plan = plan_story_from_data(
         windows, scenes, files, folder, synopsis, target,
-        relook_dir=relook_dir, progress_callback=progress_callback,
+        relook_dir=relook_dir, progress_callback=progress_callback, length_as_max=length_as_max,
     )
     if progress_callback:
         progress_callback("editing", 92, "비트를 컷으로 캐스팅 중...")

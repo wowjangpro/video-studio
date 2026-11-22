@@ -537,6 +537,7 @@ def main():
     synopsis = str(options.get("synopsis") or editing_comment).strip()
     ai_engine = str(options.get("ai_engine", "ollama"))  # "claude" | "scored" | "story"
     target_minutes = int(options.get("target_minutes", 0))
+    length_as_max = bool(options.get("length_as_max", False))   # 목표 길이를 상한으로 (video-pipeline)
 
     if ai_engine == "story" and not synopsis:
         # 수 시간짜리 Stage 1/2 를 돌린 뒤에 실패하지 않도록 맨 앞에서 거른다
@@ -648,6 +649,7 @@ def main():
                     folder_path, synopsis, target_minutes,
                     progress_callback=progress,
                     relook_dir=os.path.join(get_autocut_dir(folder_path), "relook"),
+                    length_as_max=length_as_max,
                 )
             else:  # claude (기본값) — 하이브리드
                 keep_segments = run_hybrid_editing(
@@ -1115,6 +1117,7 @@ def main():
                 folder_path, synopsis, target_minutes,
                 progress_callback=progress,
                 relook_dir=os.path.join(get_autocut_dir(folder_path), "relook"),
+                length_as_max=length_as_max,
             )
         else:  # claude (기본값) — 하이브리드
             keep_segments = run_hybrid_editing(

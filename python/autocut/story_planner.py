@@ -403,6 +403,11 @@ def render_markdown(plan: dict, windows: list[dict], target_minutes: int) -> str
 # 실행
 # ---------------------------------------------------------------------------
 
+MIN_LINE = "- **총 길이**: 완성본 약 __TARGET_MIN__분. 비트 target_seconds의 합이 이 근처가 되게."
+MAX_LINE = ("- **총 길이**: 완성본은 길어도 __TARGET_MIN__분 이내 (상한). 이 길이를 채우려고 비트를 늘리거나 "
+            "덜 볼만한 활동을 남기지 마세요 — 볼거리가 적은 날은 짧은 대로 둡니다.")
+
+
 def plan_story_from_data(
     windows: list[dict],
     scenes: list[dict],
@@ -413,10 +418,15 @@ def plan_story_from_data(
     relook_dir: str | None = None,
     do_relook: bool = True,
     progress_callback=None,
+    length_as_max: bool = False,
 ) -> dict:
-    """1단계 스토리 설계 — 메모리 데이터로 호출 (analyze.py 경로)"""
+    """1단계 스토리 설계 — 메모리 데이터로 호출 (analyze.py 경로)
+    length_as_max: 목표 길이를 '채울 분량'이 아니라 상한으로 (video-pipeline — 길어도 N분, 볼거리만큼만)"""
     scenes = [s for s in scenes if not s.get("is_ng")]
-    prompt = (STORY_PROMPT
+    base = STORY_PROMPT
+    if length_as_max:
+        base = base.replace(MIN_LINE, MAX_LINE)
+    prompt = (base
               .replace("__SYNOPSIS__", synopsis.strip())
               .replace("__TARGET_MIN__", str(target_minutes))
               .replace("__SCENE_INDEX__", build_scene_index(scenes))
