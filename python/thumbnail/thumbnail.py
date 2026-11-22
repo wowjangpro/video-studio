@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""유튜브 썸네일 5장 + 제목·설명 생성 (원본 촬영 폴더 기준)
+"""유튜브 썸네일 5장(--count 로 조절) + 제목·설명 생성 (원본 촬영 폴더 기준)
 
   thumbnail.py load     <folder>
-  thumbnail.py generate [--synopsis TEXT] -- <folder>
+  thumbnail.py generate [--synopsis TEXT] [--count N] -- <folder>   (N 기본 5)
   thumbnail.py compose  <folder> <id> <text_json>
   thumbnail.py select   <folder> <id>
 
@@ -469,7 +469,7 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         "영상에 실제로 있는 일만 쓴다 (과장은 되지만 거짓은 안 된다). "
         "문구가 말하는 것이 고른 프레임에 보여야 한다 (예: '맑은 아침'이라 쓰면 밝은 하늘이 보이는 프레임). "
         "시간·횟수 같은 숫자는 시놉시스에 적힌 것만 쓴다 — AI 편집 설계의 분량(몇 분짜리)은 실제 걸린 시간이 아니다.\n"
-        "제목: 검색될 단어(캠핑, 지명·장비 등 실제로 나오는 것)를 자연스럽게 넣고, 다섯 안의 제목이 서로 달라야 한다. "
+        f"제목: 검색될 단어(캠핑, 지명·장비 등 실제로 나오는 것)를 자연스럽게 넣고, {CONCEPT_COUNT}개 안의 제목이 서로 달라야 한다. "
         "이모지는 쓰지 않는다.\n"
         "설명: 첫 두 줄에 영상의 핵심을 담고(검색 결과에 보이는 부분), 이어서 그날의 흐름을 짧게 소개한다. "
         "해시태그는 설명에 넣지 말고 hashtags 에 따로 준다 (# 포함).\n\n"
@@ -828,6 +828,18 @@ def cmd_select(folder: str, item_id: int) -> None:
     emit({"type": "selected", "result": result})
 
 
+def set_concept_count(n: int) -> None:
+    """썸네일 장 수를 바꾼다 (기본 5 — 앱. video-pipeline 은 10). 프롬프트 · 응답 형식이 모두 이 값을 쓴다."""
+    global CONCEPT_COUNT, CONCEPT_GUIDE
+    old = CONCEPT_COUNT
+    CONCEPT_COUNT = n
+    CONCEPT_GUIDE = CONCEPT_GUIDE.replace(f"썸네일 콘셉트 {old}개", f"썸네일 콘셉트 {n}개") \
+                                 .replace(f"- {old}개는 각기 다른 각도", f"- {n}개는 각기 다른 각도")
+    concepts = CONCEPT_SCHEMA["properties"]["concepts"]
+    concepts["minItems"] = concepts["maxItems"] = n
+    COPY_SCHEMA["properties"]["thumbnails"]["maxItems"] = n
+
+
 def main() -> None:
     if len(sys.argv) < 3:
         fail("사용법: thumbnail.py load|generate|compose|select ...")
@@ -835,9 +847,12 @@ def main() -> None:
     if command == "generate":
         parser = argparse.ArgumentParser()
         parser.add_argument("--synopsis", default=None)
+        parser.add_argument("--count", type=int, default=CONCEPT_COUNT, help="썸네일 장 수 (기본 5)")
         parser.add_argument("folder")
         args = parser.parse_args(sys.argv[2:])
         folder = os.path.abspath(args.folder)
+        if args.count != CONCEPT_COUNT:
+            set_concept_count(max(1, min(12, args.count)))
     else:
         folder = os.path.abspath(sys.argv[2])
     if not os.path.isdir(folder):
