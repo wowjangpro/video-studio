@@ -42,6 +42,7 @@ RESULT_FILE = "result.json"
 THUMB_W, THUMB_H = 1280, 720
 CONCEPT_COUNT = 5
 TITLE_STYLE = ""      # --title-style 파일 내용 — 채널의 기존 제목 형식 (없으면 기본 지침)
+TASTE = ""            # --taste 파일 내용 — 운영자가 지난 선택에서 보인 취향 (video-pipeline learning/taste.md)
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".webm")
 
 POSITIONS = ["top-left", "top-right", "top-center", "bottom-left", "bottom-right", "bottom-center"]
@@ -515,6 +516,7 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         "이모지는 쓰지 않는다.\n"
         + (f"제목 형식: 이 채널의 기존 제목 형식을 반드시 따른다 (구분 기호 · 구절 수 · 말투 · 끝 구절). "
            f"이때 제목 길이는 최대 100자.\n{TITLE_STYLE}\n" if TITLE_STYLE else "")
+        + (f"## 운영자 취향 (지난 선택에서 배운 것 — 우선 반영)\n{TASTE}\n\n" if TASTE else "")
         + "설명: 첫 두 줄에 영상의 핵심을 담고(검색 결과에 보이는 부분), 이어서 그날의 흐름을 짧게 소개한다. "
         "해시태그는 설명에 넣지 말고 hashtags 에 따로 준다 (# 포함).\n\n"
         + ctx + "\n\n## 콘셉트와 후보 프레임\n" + "\n\n".join(blocks)
@@ -1073,14 +1075,18 @@ def main() -> None:
         parser.add_argument("--synopsis", default=None)
         parser.add_argument("--count", type=int, default=CONCEPT_COUNT, help="썸네일 장 수 (기본 5)")
         parser.add_argument("--title-style", default=None, help="채널 제목 형식을 적은 파일 (제목이 이 형식을 따른다)")
+        parser.add_argument("--taste", default=None, help="운영자 취향 프로필 파일 (문구 · 스타일 · 장면 고르기에 반영)")
         parser.add_argument("folder")
         args = parser.parse_args(sys.argv[2:])
         folder = os.path.abspath(args.folder)
         if args.count != CONCEPT_COUNT:
             set_concept_count(max(1, min(12, args.count)))
+        global TITLE_STYLE, TASTE, CONCEPT_GUIDE
         if args.title_style:
-            global TITLE_STYLE
             TITLE_STYLE = read_text(args.title_style).strip()
+        if args.taste:
+            TASTE = read_text(args.taste).strip()[:5000]
+            CONCEPT_GUIDE += f"\n## 운영자 취향 (지난 선택에서 배운 것 — 콘셉트 · 장면 고르기에도 반영)\n{TASTE}\n"
     else:
         folder = os.path.abspath(sys.argv[2])
     if not os.path.isdir(folder):
