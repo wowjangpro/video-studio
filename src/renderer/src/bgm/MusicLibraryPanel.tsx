@@ -18,6 +18,7 @@ export default function MusicLibraryPanel(): JSX.Element {
   const playingId = useLibraryStore((s) => s.playingId)
   const selectLibrary = useLibraryStore((s) => s.selectLibrary)
   const reload = useLibraryStore((s) => s.reload)
+  const selectAudioDir = useLibraryStore((s) => s.selectAudioDir)
   const setQuery = useLibraryStore((s) => s.setQuery)
   const setPlaying = useLibraryStore((s) => s.setPlaying)
   const hasVideo = useBgmStore((s) => !!s.filePath)
@@ -85,6 +86,23 @@ export default function MusicLibraryPanel(): JSX.Element {
             <span className="music-lib__counts">
               {info.trackCount.toLocaleString()}곡 · 음원 {info.downloadedCount.toLocaleString()} · 분석 {info.analyzedCount.toLocaleString()}
             </span>
+          </div>
+        )}
+
+        {info && (
+          <div className="music-lib__audio-dir" title={info.audioDir}>
+            <span className="music-lib__audio-path">
+              음원: {info.audioDirCustom ? info.audioDir : '라이브러리 안 audio 폴더'}
+            </span>
+            <button className="btn btn--sm" onClick={() => void selectAudioDir()} disabled={loading}>
+              음원 폴더
+            </button>
+          </div>
+        )}
+
+        {info && !info.audioDirOk && (
+          <div className="music-lib__error">
+            음원 폴더가 보이지 않습니다 ({info.audioDir}). NAS 연결을 확인한 뒤 새로고침하세요. 미리듣기 · 넣기 · 다빈치 내보내기가 되지 않습니다.
           </div>
         )}
 

@@ -34,7 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "python", "bgm"))
 
-from music_library import audio_rel_path, connect, now_iso, read_manifest, resolve_inside  # noqa: E402
+from music_library import audio_base, audio_file, audio_rel_path, connect, now_iso, read_manifest  # noqa: E402
 from orca_page import LibraryPage, OrcaError, PageLost  # noqa: E402
 
 DOWNLOADS = os.path.expanduser("~/Downloads")
@@ -155,9 +155,10 @@ def pending_groups(conn, root: str):
     """음원이 없는 곡을 (장르 표시 이름, 분위기 표시 이름) 별로 묶는다."""
     groups: dict[tuple[str, str], dict[str, dict]] = defaultdict(dict)
     skipped = []
+    base = audio_base(root)
     for row in conn.execute("SELECT id, title, artist, duration_sec, audio_path, source_json FROM tracks"):
         if row["audio_path"]:
-            full = resolve_inside(root, row["audio_path"])
+            full = audio_file(base, row["audio_path"])
             if full and os.path.isfile(full):
                 continue
         src = json.loads(row["source_json"] or "{}")
@@ -171,7 +172,7 @@ def pending_groups(conn, root: str):
 
 def store(conn, root: str, track: dict, path: str) -> None:
     rel = audio_rel_path(track["artist"], track["title"], track["id"])
-    dest = os.path.join(root, rel)
+    dest = audio_file(audio_base(root), rel)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.move(path, dest)
     with conn:
@@ -246,9 +247,10 @@ def verify_library(root: str) -> None:
     """받아 둔 음원을 모두 끝까지 디코드해 검사하고, 불량은 audio_path 를 비워 다시 받게 한다."""
     conn = connect(root)
     rows = conn.execute("SELECT id, title, duration_sec, audio_path FROM tracks WHERE audio_path IS NOT NULL").fetchall()
+    base = audio_base(root)
     bad = 0
     for r in rows:
-        full = resolve_inside(root, r["audio_path"])
+        full = audio_file(base, r["audio_path"])
         if full and os.path.isfile(full) and is_complete(full, r["duration_sec"]):
             continue
         bad += 1
@@ -265,9 +267,10 @@ def adopt_files(src_dir: str, root: str) -> None:
     """`제목 - 아티스트.mp3` 파일을 이름으로 곡과 맞춰, 검사를 통과하면 라이브러리로 옮긴다."""
     conn = connect(root)
     pending: dict[str, list[dict]] = defaultdict(list)
+    base = audio_base(root)
     for r in conn.execute("SELECT id, title, artist, duration_sec, audio_path FROM tracks"):
         if r["audio_path"]:
-            full = resolve_inside(root, r["audio_path"])
+            full = audio_file(base, r["audio_path"])
             if full and os.path.isfile(full):
                 continue
         pending[norm(f"{r['title']} - {r['artist'] or ''}")].append(dict(r))
@@ -285,7 +288,7 @@ def adopt_files(src_dir: str, root: str) -> None:
             log(f"  ✗ 검사 실패: {name}")
             continue
         rel = audio_rel_path(track["artist"], track["title"], track["id"])
-        dest = os.path.join(root, rel)
+        dest = audio_file(base, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.move(path, dest)
         with conn:

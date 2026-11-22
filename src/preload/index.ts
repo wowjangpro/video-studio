@@ -78,7 +78,7 @@ export interface LibraryTrack {
   durationSec: number | null
   licenseType: 'attribution_required' | 'attribution_not_required' | null
   attributionText: string | null
-  /** 음원 파일 절대 경로 (파일이 없으면 null) */
+  /** 음원 파일 절대 경로 (받지 않은 곡이거나 음원 폴더가 안 보이면 null) */
   audioPath: string | null
   bpm: number | null
   hasVocals: boolean | null
@@ -92,6 +92,12 @@ export interface LibraryInfo {
   trackCount: number
   downloadedCount: number
   analyzedCount: number
+  /** 음원 폴더 절대 경로 (기본은 <root>/audio) */
+  audioDir: string
+  /** library.json 에 따로 지정한 음원 폴더인지 */
+  audioDirCustom: boolean
+  /** 음원 폴더가 지금 보이는지 (NAS 연결이 끊기면 false) */
+  audioDirOk: boolean
 }
 
 export type BgmResult<T> = { ok: true; data: T } | { ok: false; message: string }
@@ -323,6 +329,7 @@ const bgm = {
   selectFile: (): Promise<string | null> => ipcRenderer.invoke('bgm:select-file'),
   selectLibrary: (): Promise<LibraryOpenResult> => ipcRenderer.invoke('bgm:library-select'),
   openLibrary: (root: string): Promise<LibraryOpenResult> => ipcRenderer.invoke('bgm:library-open', root),
+  selectAudioDir: (root: string): Promise<LibraryOpenResult> => ipcRenderer.invoke('bgm:library-audio-dir', root),
 
   /** 구간에 어울리는 곡 추천 (진행 상황은 onProgress) */
   recommend: (root: string, video: string, start: number, end: number, preference: string, usedTrackIds: string[] = []): Promise<BgmResult<RecommendData>> =>

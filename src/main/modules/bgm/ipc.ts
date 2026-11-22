@@ -79,8 +79,8 @@ export type LibraryOpenResult =
   | { status: 'canceled' }
   | { status: 'error'; message: string }
 
-async function runLibraryCommand(command: 'open' | 'init', root: string): Promise<LibraryOpenResult> {
-  const data = await runOnce('music_library.py', [command, root], ['library', 'not_library'])
+async function runLibraryCommand(command: 'open' | 'init' | 'set-audio', root: string, ...extra: string[]): Promise<LibraryOpenResult> {
+  const data = await runOnce('music_library.py', [command, root, ...extra], ['library', 'not_library'])
   if (data.type === 'library') return { status: 'ok', info: data.info as Json, tracks: data.tracks as Json[] }
   if (data.type === 'not_library') return { status: 'not_library', root: String(data.root), empty: Boolean(data.empty) }
   return { status: 'error', message: String(data.message) }
@@ -131,6 +131,21 @@ export function registerBgmIpc(): void {
 
   ipcMain.handle('bgm:library-open', async (_event, root: string): Promise<LibraryOpenResult> => {
     return runLibraryCommand('open', root)
+  })
+
+  // 음원 폴더 바꾸기 (검색 데이터는 라이브러리 폴더에 두고 음원만 NAS 등에 둘 때)
+  ipcMain.handle('bgm:library-audio-dir', async (_event, root: string): Promise<LibraryOpenResult> => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return { status: 'canceled' }
+
+    const result = await dialog.showOpenDialog(win, {
+      title: '음원 폴더 선택 (mp3 가 들어 있는 audio 폴더 또는 그 위 라이브러리 사본 폴더)',
+      buttonLabel: '선택',
+      properties: ['openDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return { status: 'canceled' }
+
+    return runLibraryCommand('set-audio', root, result.filePaths[0])
   })
 
   ipcMain.handle('bgm:select-file', async () => {

@@ -233,6 +233,23 @@
   color: var(--text-secondary);
 }
 
+.music-lib__audio-dir {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.music-lib__audio-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .music-lib__error {
   font-size: 12px;
   color: var(--danger);

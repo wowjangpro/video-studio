@@ -32,6 +32,8 @@ interface LibraryState {
 
   /** 폴더 선택 대화상자 → 열기(없으면 새로 만들기) */
   selectLibrary: () => Promise<void>
+  /** 음원 폴더 선택 대화상자 → library.json 에 기록하고 다시 읽는다 */
+  selectAudioDir: () => Promise<void>
   /** 저장된 경로 또는 현재 라이브러리를 다시 읽는다 */
   reload: () => Promise<void>
   setQuery: (query: string) => void
@@ -64,6 +66,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       // 오류 메시지는 결과가 나온 뒤에만 바꾼다 (취소 시 직전 오류 유지)
       set({ loading: true })
       apply(await window.electronAPI.bgm.selectLibrary())
+    },
+
+    selectAudioDir: async () => {
+      const root = get().info?.root
+      if (!root) return
+      set({ loading: true })
+      apply(await window.electronAPI.bgm.selectAudioDir(root))
     },
 
     reload: async () => {

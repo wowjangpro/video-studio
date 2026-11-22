@@ -7,13 +7,15 @@ DB 안의 파일 위치는 모두 라이브러리 루트 기준 상대 경로로
     <root>/
       library.json     라이브러리 식별자 + 형식 버전
       catalog.sqlite   곡 메타데이터 · 분석 결과
-      audio/           음원 파일
+      audio/           음원 파일 (library.json 의 audio_dir 로 다른 곳 — 예: NAS — 을 가리킬 수 있다)
       usage/           영상별 사용 기록
       sources/         보관함에서 수집한 원본 목록 (JSON Lines, 수집일별)
 
 사용법:
     music_library.py open <root>   기존 라이브러리를 열어 곡 목록을 출력
     music_library.py init <root>   새 라이브러리를 만든 뒤 open 과 같은 출력
+    music_library.py set-audio <root> <dir>
+                                   음원 폴더를 바꾼 뒤 open 과 같은 출력 (라이브러리 안 audio/ 를 고르면 기본값으로 되돌림)
 
 출력(JSON Lines, 마지막 한 줄):
     {"type": "library", "info": {...}, "tracks": [...]}
@@ -32,6 +34,10 @@ FORMAT_VERSION = 1
 MANIFEST_NAME = "library.json"
 CATALOG_NAME = "catalog.sqlite"
 SUBDIRS = ("audio", "usage", "sources")
+AUDIO_SUBDIR = "audio"
+# library.json 에 적는 음원 폴더 (없으면 <root>/audio). 절대 경로 또는 루트 기준 상대 경로.
+# 검색 데이터(catalog.sqlite)는 빠른 디스크에, 음원(45GB)은 NAS 에 두려고 나눌 수 있게 했다 (2026-11-22).
+AUDIO_DIR_KEY = "audio_dir"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -102,6 +108,62 @@ def read_manifest(root: str) -> dict | None:
     if manifest.get("format") != LIBRARY_FORMAT:
         return None
     return manifest
+
+
+def audio_base(root: str, manifest: dict | None = None) -> str:
+    """음원 폴더의 절대 경로."""
+    manifest = manifest if manifest is not None else (read_manifest(root) or {})
+    custom = manifest.get(AUDIO_DIR_KEY)
+    if isinstance(custom, str) and custom.strip():
+        return os.path.abspath(os.path.join(root, custom))
+    return os.path.abspath(os.path.join(root, AUDIO_SUBDIR))
+
+
+def audio_file(base: str, rel_path: str) -> str | None:
+    """DB 의 audio_path(`audio/파일.mp3`)를 음원 폴더 안의 절대 경로로 바꾼다. 폴더 밖을 가리키면 None."""
+    if not rel_path or os.path.isabs(rel_path):
+        return None
+    prefix = AUDIO_SUBDIR + "/"
+    name = rel_path[len(prefix):] if rel_path.startswith(prefix) else rel_path
+    # realpath 를 쓰지 않는다 — NAS 에서는 곡마다 네트워크 조회가 생겨 7천 곡 목록·추천이 느려진다.
+    # 경로 문자열만으로 폴더 밖(../)을 막는다 (파일 이름은 우리가 만든 것이라 심볼릭 링크는 없다).
+    base = os.path.normpath(base)
+    full = os.path.normpath(os.path.join(base, name))
+    if os.path.commonpath([base, full]) != base:
+        return None
+    return full
+
+
+def write_manifest(root: str, manifest: dict) -> None:
+    path = os.path.join(root, MANIFEST_NAME)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def set_audio_dir(root: str, chosen: str) -> None:
+    """음원 폴더를 바꾼다. 라이브러리 폴더 통째 사본(안에 audio/ 가 있는 폴더)을 골라도 그 audio/ 를 쓴다."""
+    manifest = read_manifest(root)
+    if manifest is None:
+        raise RuntimeError(f"음악 라이브러리 폴더가 아닙니다: {root}")
+    chosen = os.path.abspath(chosen)
+    if not os.path.isdir(chosen):
+        raise RuntimeError(f"음원 폴더를 찾을 수 없습니다: {chosen}")
+    nested = os.path.join(chosen, AUDIO_SUBDIR)
+    if os.path.basename(chosen.rstrip("/")) != AUDIO_SUBDIR and os.path.isdir(nested):
+        chosen = nested
+    default = os.path.realpath(os.path.join(root, AUDIO_SUBDIR))
+    if os.path.realpath(chosen) == default:
+        manifest.pop(AUDIO_DIR_KEY, None)
+    else:
+        # 라이브러리 안이면 상대 경로로 적어 폴더째 옮겨도 맞게 한다
+        root_real = os.path.realpath(root)
+        real = os.path.realpath(chosen)
+        inside = os.path.commonpath([root_real, real]) == root_real
+        manifest[AUDIO_DIR_KEY] = os.path.relpath(real, root_real) if inside else chosen
+    write_manifest(root, manifest)
 
 
 # ExFAT · NTFS 에서 파일 이름에 쓸 수 없는 문자
@@ -191,9 +253,7 @@ def init_library(root: str) -> None:
             "source": "YouTube Studio 오디오 보관함",
             "created_at": now_iso(),
         }
-        with open(os.path.join(root, MANIFEST_NAME), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        write_manifest(root, manifest)
     for sub in SUBDIRS:
         os.makedirs(os.path.join(root, sub), exist_ok=True)
     connect(root).close()
@@ -216,13 +276,16 @@ def load_library(root: str) -> tuple[dict, list[dict]]:
     finally:
         conn.close()
 
+    # 곡마다 파일이 있는지 보지 않는다 — NAS 에서는 7천 곡을 하나씩 확인하느라 열기가 느려진다.
+    # 받은 곡 여부는 DB(audio_path) 기준이고, 음원 폴더가 보이는지만 한 번 확인한다.
+    base = audio_base(root, manifest)
+    base_ok = os.path.isdir(base)
     tracks = []
     downloaded = 0
     analyzed = 0
     for r in rows:
-        abs_path = resolve_inside(root, r["audio_path"]) if r["audio_path"] else None
-        exists = bool(abs_path and os.path.isfile(abs_path))
-        downloaded += exists
+        abs_path = audio_file(base, r["audio_path"]) if r["audio_path"] else None
+        downloaded += abs_path is not None
         analyzed += r["analyzed_at"] is not None
         tracks.append({
             "id": r["id"],
@@ -234,7 +297,7 @@ def load_library(root: str) -> tuple[dict, list[dict]]:
             "durationSec": r["duration_sec"],
             "licenseType": r["license_type"],
             "attributionText": r["attribution_text"],
-            "audioPath": abs_path if exists else None,
+            "audioPath": abs_path if base_ok else None,
             "bpm": r["bpm"],
             "hasVocals": None if r["has_vocals"] is None else bool(r["has_vocals"]),
             "analyzed": r["analyzed_at"] is not None,
@@ -247,12 +310,16 @@ def load_library(root: str) -> tuple[dict, list[dict]]:
         "trackCount": len(tracks),
         "downloadedCount": downloaded,
         "analyzedCount": analyzed,
+        "audioDir": base,
+        "audioDirCustom": bool((manifest or {}).get(AUDIO_DIR_KEY)),
+        "audioDirOk": base_ok,
     }, tracks
 
 
 def main() -> None:
-    if len(sys.argv) < 3 or sys.argv[1] not in ("open", "init"):
-        emit({"type": "error", "message": "사용법: music_library.py open|init <root>"})
+    if len(sys.argv) < 3 or sys.argv[1] not in ("open", "init", "set-audio") or (
+            sys.argv[1] == "set-audio" and len(sys.argv) < 4):
+        emit({"type": "error", "message": "사용법: music_library.py open|init <root> · set-audio <root> <dir>"})
         sys.exit(1)
 
     command, root = sys.argv[1], sys.argv[2]
@@ -260,6 +327,8 @@ def main() -> None:
     try:
         if command == "init":
             init_library(root)
+        elif command == "set-audio":
+            set_audio_dir(root, sys.argv[3])
         else:
             if not os.path.isdir(root):
                 emit({"type": "error", "message": f"라이브러리 폴더를 찾을 수 없습니다: {root}"})
@@ -272,7 +341,8 @@ def main() -> None:
         info, tracks = load_library(root)
         emit({"type": "library", "info": info, "tracks": tracks})
     except Exception as e:  # noqa: BLE001 — 모든 실패를 화면에 전달
-        emit({"type": "error", "message": f"라이브러리를 열지 못했습니다: {e}"})
+        what = "음원 폴더를 바꾸지 못했습니다" if command == "set-audio" else "라이브러리를 열지 못했습니다"
+        emit({"type": "error", "message": f"{what}: {e}"})
         sys.exit(1)
 
 

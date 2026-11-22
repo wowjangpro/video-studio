@@ -19,6 +19,10 @@ BGM 탭의 음악 추천이 쓰는 로컬 라이브러리를 만들고 갱신하
 | 음원 없는 곡 내려받기 | `download.py <pageId> <root> [--limit N] [--min-free-gb 15]` |
 | 받아 둔 음원 전체 검사 (잘린 파일은 다시 받을 대상으로) | `download.py --verify <root>` |
 
+음원(audio/, 약 45GB)만 NAS 등 다른 곳에 두고 검색 데이터(library.json · catalog.sqlite · usage/)는 빠른 디스크에
+둘 수 있다. BGM 탭의 「음원 폴더」 로 고르면 `library.json` 의 `audio_dir` 에 적힌다. 위 명령들도 그 폴더를 읽고 쓴다.
+DB 의 `audio_path` 는 그대로 `audio/파일.mp3` 이고, 앞의 `audio/` 를 음원 폴더로 바꿔 읽는다.
+
 긴 작업은 대화가 끝나도 돌도록 `nohup caffeinate -i ... > <root>/logs/<이름>.log 2>&1 &` 로 띄운다.
 멈추려면 `pkill -f yt-audio-library/download.py`. 다시 실행하면 이어서 받는다.
 

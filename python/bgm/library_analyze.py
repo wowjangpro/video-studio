@@ -39,7 +39,7 @@ import time
 
 import numpy as np
 
-from music_library import connect, emit, now_iso, read_manifest, resolve_inside
+from music_library import audio_base, audio_file, connect, emit, now_iso, read_manifest
 
 ANALYZER_VERSION = "4"  # 2: CLAP 모델 교체, 3: 보컬 판정을 AST 로, 4: 가사 보컬과 허밍·합창 구분
 # laion/larger_clap_music 은 체크포인트가 망가져 어떤 문장이든 같은 임베딩을 낸다 (2026-11-17 확인:
@@ -308,8 +308,9 @@ def main() -> None:
         q += " AND (a.analyzed_at IS NULL OR a.analyzer_version IS NOT ? )"
     rows = conn.execute(q, () if a.force else (ANALYZER_VERSION,)).fetchall()
     jobs = []
+    base = audio_base(root)
     for r in rows:
-        full = resolve_inside(root, r["audio_path"])
+        full = audio_file(base, r["audio_path"])
         if full and os.path.isfile(full):
             jobs.append((r["id"], full))
     if a.limit:

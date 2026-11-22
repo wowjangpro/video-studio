@@ -26,7 +26,7 @@ import sys
 
 import numpy as np
 
-from music_library import connect, emit, read_manifest, resolve_inside
+from music_library import audio_base, audio_file, connect, emit, read_manifest
 
 GENRES = ["Alternative & Punk", "Ambient", "Children's", "Cinematic", "Classical", "Country & Folk",
           "Dance & Electronic", "Hip-Hop & Rap", "Holiday", "Jazz & Blues", "Pop", "R&B & Soul",
@@ -119,6 +119,7 @@ def rank(conn, root: str, query_emb: np.ndarray, criteria: dict, duration: float
            WHERE t.audio_path IS NOT NULL"""
     ).fetchall()
     target_energy = ENERGY_TARGET[criteria["energy"]]
+    base = audio_base(root)
     scored = []
     for r in rows:
         segs = np.frombuffer(r["segments"], dtype=np.float16).astype(np.float32).reshape(r["n_segments"], r["dim"])
@@ -157,7 +158,7 @@ def rank(conn, root: str, query_emb: np.ndarray, criteria: dict, duration: float
             reasons.append(f"템포 {r['bpm']:.0f} BPM")
         reasons.append(f"구간 에너지 {win_energy:.2f} (목표 {target_energy})")
 
-        full = resolve_inside(root, r["audio_path"])
+        full = audio_file(base, r["audio_path"])
         scored.append({
             "id": r["id"], "title": r["title"], "artist": r["artist"], "genre": r["genre"], "mood": r["mood"],
             "durationSec": track_len, "offsetSec": offset, "score": round(score, 4), "similarity": round(sem, 4),

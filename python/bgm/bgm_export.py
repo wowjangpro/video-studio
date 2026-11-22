@@ -25,7 +25,7 @@ import sys
 import uuid
 from urllib.parse import quote
 
-from music_library import connect, emit, now_iso, read_manifest, resolve_inside
+from music_library import audio_base, audio_file, connect, emit, now_iso, read_manifest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "autocut"))
 from edl_export import resolve_tc_base, timecode_to_frames  # noqa: E402
@@ -64,7 +64,7 @@ def save_usage(root: str, data: dict) -> None:
 def cue_view(root: str, cue: dict) -> dict:
     """화면에 줄 큐 — 음원 절대 경로를 붙인다."""
     out = dict(cue)
-    out["audioPath"] = resolve_inside(root, cue.get("audioRel") or "")
+    out["audioPath"] = audio_file(audio_base(root), cue.get("audioRel") or "")
     return out
 
 
@@ -193,6 +193,9 @@ def build_fcpxml(root: str, data: dict) -> str:
         return "file://" + quote(os.path.abspath(p), safe="/")
 
     name = os.path.splitext(os.path.basename(video))[0]
+    base = audio_base(root)
+    if data["cues"] and not os.path.isdir(base):
+        raise ValueError(f"음원 폴더가 보이지 않습니다: {base} (NAS 연결을 확인하세요)")
     assets = [
         f'    <asset id="r2" name="{html.escape(name)}" src="{url(video)}" start="{t(tc_frames) if tc_frames else "0s"}" '
         f'duration="{t(video_frames)}" hasVideo="1" hasAudio="{1 if info["has_audio"] else 0}" format="r1" '
@@ -203,7 +206,7 @@ def build_fcpxml(root: str, data: dict) -> str:
     connected = []
     cues = sorted(data["cues"], key=lambda c: c["rangeStart"])
     for cue, lane in zip(cues, assign_lanes(cues)):
-        path = resolve_inside(root, cue.get("audioRel") or "")
+        path = audio_file(base, cue.get("audioRel") or "")
         if not path or not os.path.isfile(path):
             raise ValueError(f"음원 파일이 없습니다: {cue.get('title')} ({cue.get('audioRel')})")
         if cue["trackId"] not in asset_ids:
