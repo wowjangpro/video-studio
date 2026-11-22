@@ -41,6 +41,7 @@ OUT_DIRNAME = "thumbnail"
 RESULT_FILE = "result.json"
 THUMB_W, THUMB_H = 1280, 720
 CONCEPT_COUNT = 5
+TITLE_STYLE = ""      # --title-style 파일 내용 — 채널의 기존 제목 형식 (없으면 기본 지침)
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".webm")
 
 POSITIONS = ["top-left", "top-right", "top-center", "bottom-left", "bottom-right", "bottom-center"]
@@ -440,7 +441,7 @@ COPY_SCHEMA = {
                     "position": {"type": "string", "enum": POSITIONS, "description": "문구 위치 — 피사체(얼굴·핵심 물체)를 가리지 않는 빈 쪽"},
                     "color": {"type": "string", "enum": list(COLORS), "description": "강조색"},
                     "font": {"type": "string", "enum": list(FONTS), "description": "글꼴 느낌: dohyeon=굵고 단단함, hanna=둥글고 친근함, ssurround=귀엽고 통통, gothic=깔끔한 고딕"},
-                    "title": {"type": "string", "description": "유튜브 제목 (40자 안팎, 최대 70자)"},
+                    "title": {"type": "string", "description": "유튜브 제목 (40자 안팎, 최대 70자 — 제목 형식이 주어지면 그 형식, 최대 100자)"},
                     "description": {"type": "string", "description": "유튜브 설명 (3~6문장, 줄바꿈 허용)"},
                     "hashtags": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 6},
                     "reason": {"type": "string", "description": "이 프레임과 문구를 고른 이유 1문장"},
@@ -475,7 +476,9 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         "시간·횟수 같은 숫자는 시놉시스에 적힌 것만 쓴다 — AI 편집 설계의 분량(몇 분짜리)은 실제 걸린 시간이 아니다.\n"
         f"제목: 검색될 단어(캠핑, 지명·장비 등 실제로 나오는 것)를 자연스럽게 넣고, {CONCEPT_COUNT}개 안의 제목이 서로 달라야 한다. "
         "이모지는 쓰지 않는다.\n"
-        "설명: 첫 두 줄에 영상의 핵심을 담고(검색 결과에 보이는 부분), 이어서 그날의 흐름을 짧게 소개한다. "
+        + (f"제목 형식: 이 채널의 기존 제목 형식을 반드시 따른다 (구분 기호 · 구절 수 · 말투 · 끝 구절). "
+           f"이때 제목 길이는 최대 100자.\n{TITLE_STYLE}\n" if TITLE_STYLE else "")
+        + "설명: 첫 두 줄에 영상의 핵심을 담고(검색 결과에 보이는 부분), 이어서 그날의 흐름을 짧게 소개한다. "
         "해시태그는 설명에 넣지 말고 hashtags 에 따로 준다 (# 포함).\n\n"
         + ctx + "\n\n## 콘셉트와 후보 프레임\n" + "\n\n".join(blocks)
     )
@@ -852,11 +855,15 @@ def main() -> None:
         parser = argparse.ArgumentParser()
         parser.add_argument("--synopsis", default=None)
         parser.add_argument("--count", type=int, default=CONCEPT_COUNT, help="썸네일 장 수 (기본 5)")
+        parser.add_argument("--title-style", default=None, help="채널 제목 형식을 적은 파일 (제목이 이 형식을 따른다)")
         parser.add_argument("folder")
         args = parser.parse_args(sys.argv[2:])
         folder = os.path.abspath(args.folder)
         if args.count != CONCEPT_COUNT:
             set_concept_count(max(1, min(12, args.count)))
+        if args.title_style:
+            global TITLE_STYLE
+            TITLE_STYLE = read_text(args.title_style).strip()
     else:
         folder = os.path.abspath(sys.argv[2])
     if not os.path.isdir(folder):
