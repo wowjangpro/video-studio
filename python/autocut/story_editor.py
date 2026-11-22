@@ -504,7 +504,10 @@ def run_story_editing(
     )
     if progress_callback:
         progress_callback("editing", 92, "비트를 컷으로 캐스팅 중...")
-    segments = assemble(plan, windows, scenes, speech_segments or [], target, files=files)
+    # length_as_max(video-pipeline): 길이는 기준일 뿐 — 볼거리가 많으면 넘어도 된다 (사용자 2026-11-22).
+    # 예산 축소는 기준의 1.4배를 넘을 때만 (안전장치)
+    budget = round(target * 1.4) if length_as_max else target
+    segments = assemble(plan, windows, scenes, speech_segments or [], budget, files=files)
     md = render_markdown(plan, windows, target)
     if progress_callback:
         progress_callback("editing", 95, f"스토리 편집 완료: {len(segments)}컷")
