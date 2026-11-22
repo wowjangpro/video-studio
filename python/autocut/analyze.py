@@ -538,8 +538,9 @@ def main():
     ai_engine = str(options.get("ai_engine", "ollama"))  # "claude" | "scored" | "story"
     target_minutes = int(options.get("target_minutes", 0))
     length_as_max = bool(options.get("length_as_max", False))   # 목표 길이를 상한으로 (video-pipeline)
+    analyze_only = bool(options.get("analyze_only", False))     # 분석(장면 설명)까지만 — 시놉시스 초안을 만들 때 (video-pipeline)
 
-    if ai_engine == "story" and not synopsis:
+    if ai_engine == "story" and not synopsis and not analyze_only:
         # 수 시간짜리 Stage 1/2 를 돌린 뒤에 실패하지 않도록 맨 앞에서 거른다
         emit({"type": "error", "message": "스토리 엔진은 시놉시스가 필요합니다 — 편집 코멘트 칸에 그날 무슨 일이 있었는지 순서대로 적어주세요 (3~10줄)."})
         return
@@ -633,6 +634,9 @@ def main():
             # Phase B: 교차검증 + 장면 그룹핑 + NG 필터
             scenes, usable_scenes = _run_phase_b(all_window_data)
 
+            if analyze_only:
+                emit({"type": "analysis_done", "windows": len(all_window_data), "scenes": len(scenes), "cached": True})
+                return
             # Phase C: 내러티브 편집
             log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면 (캐시, engine={ai_engine})")
             story_plan, story_md = None, ""
@@ -1100,6 +1104,9 @@ def main():
             folder_path, files, options, all_window_data, total_duration, scenes,
             speech_segments=all_speech_segments,
         )
+        if analyze_only:
+            emit({"type": "analysis_done", "windows": len(all_window_data), "scenes": len(scenes)})
+            return
 
         # 7. Phase C: 내러티브 편집
         log(f"내러티브 편집 시작: {len(usable_scenes)}개 장면, {len(all_window_data)}개 윈도우 (engine={ai_engine})")
