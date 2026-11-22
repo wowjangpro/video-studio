@@ -282,9 +282,11 @@ def export(root: str, video: str, out_dir: str | None) -> dict:
     stem = os.path.splitext(os.path.basename(video))[0]
     fcpxml_path = os.path.join(out_dir, f"{stem}_bgm.fcpxml")
     credits_path = os.path.join(out_dir, f"{stem}_bgm_출처.txt")
-    with open(fcpxml_path, "w", encoding="utf-8") as f:
-        f.write(build_fcpxml(root, data))
+    # 먼저 다 만든 뒤에 쓴다 — 만들다 실패하면(음원 폴더 끊김 등) 지난번 결과 파일이 빈 파일로 덮였다 (2026-11-22)
+    fcpxml = build_fcpxml(root, data)
     credits = build_credits(data)
+    with open(fcpxml_path, "w", encoding="utf-8") as f:
+        f.write(fcpxml)
     with open(credits_path, "w", encoding="utf-8") as f:
         f.write(credits)
     data["exportedAt"] = now_iso()

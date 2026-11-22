@@ -10,6 +10,7 @@ DaVinci Resolve에서 File > Import > Timeline > Pre-Conformed EDL로 불러와
 
 import bisect
 import os
+import re
 from collections import Counter
 
 
@@ -82,6 +83,35 @@ def resolve_edl_drop_frame(files: list[dict], fps_int: int, actual_fps: float) -
     if not flags:
         return False
     return Counter(flags).most_common(1)[0][0]
+
+
+# 소니 XAVC 는 파일 앞이나 끝의 NonRealTimeMeta XML 에 시작 TC 를 적는다.
+_SONY_LTC_RE = re.compile(rb'<LtcChange\s+frameCount="0"\s+value="([0-9A-Fa-f]{8})"')
+_SONY_SCAN_BYTES = 4 * 1024 * 1024
+
+
+def sony_ltc_drop_frame(path: str) -> bool | None:
+    """소니 XAVC 내장 XML 의 시작 TC 에서 drop frame 여부를 읽는다. 없으면 None.
+
+    값은 프레임·초·분·시 순서의 BCD 4바이트이고, 프레임 바이트의 0x40 비트가 drop frame 표시다
+    (예: "62204500" → 00:45:20;22 DF). ffprobe 는 이 비트를 잃어 ':' 로 보여 주는데,
+    다빈치는 이 비트대로 DF 로 읽어서 NDF 로 계산한 EDL/FCPXML 컷이 2~4초(늦은 시각이면 수십 초) 밀렸다
+    (2026-11-22, 다빈치 20.3.3 에서 확인).
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            chunks = [f.read(_SONY_SCAN_BYTES)]
+            if size > _SONY_SCAN_BYTES:
+                f.seek(max(_SONY_SCAN_BYTES, size - _SONY_SCAN_BYTES))
+                chunks.append(f.read())
+        for chunk in chunks:
+            m = _SONY_LTC_RE.search(chunk)
+            if m:
+                return bool(int(m.group(1)[:2], 16) & 0x40)
+    except OSError:
+        pass
+    return None
 
 
 def frames_to_timecode(frame_number: int, fps_int: int, drop_frame: bool = False) -> str:

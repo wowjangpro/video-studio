@@ -23,7 +23,8 @@ from scene_detector import cross_validate_all, group_windows_to_scenes, filter_n
 from storyboard import run_narrative_editing_claude, run_scored_editing, run_hybrid_editing
 from merger import merge_adjacent_segments, validate_segments, format_srt_label
 from edl_export import (generate_edl, resolve_edl_rate, resolve_tc_base,
-                        timecode_to_frames, assign_reel_names, RECORD_START_TC)
+                        timecode_to_frames, assign_reel_names, RECORD_START_TC,
+                        sony_ltc_drop_frame)
 from fcpxml_export import generate_fcpxml
 from silence_trim import trim_silence_in_segments
 from story_editor import run_story_editing
@@ -395,6 +396,12 @@ def get_video_start_tc(path: str, fps: float | None = None) -> tuple[float, bool
             # 정수 레이트에는 drop frame 이 없다. ';' 표기가 있어도 NDF 로 읽어야
             # EDL 인코더(resolve_edl_drop_frame)와 같은 축을 쓴다.
             tc = tc.replace(";", ":")
+        sony_drop = sony_ltc_drop_frame(path)
+        if sony_drop is not None and fps_int in (30, 60) and abs(actual_fps - fps_int) >= 0.001:
+            # ffprobe 의 timecode 태그는 소니 XAVC 의 DF 표시를 잃는다(':' 로 나옴).
+            # 다빈치는 내장 XML 의 DF 비트를 따르므로 그 값으로 표기를 맞춘다.
+            sep = ";" if sony_drop else ":"
+            tc = tc[:8].replace(";", ":") + sep + tc[9:]
         frames, drop_frame = timecode_to_frames(tc, fps_int)
         return frames / actual_fps, drop_frame
     except Exception:
@@ -555,6 +562,11 @@ def main():
     # 1. 초기화
     progress("initializing", 0, "영상 파일 검색 중...")
     files = scan_video_files(folder_path)
+    # 촬영 폴더에 함께 둔 완성본 등 원본이 아닌 영상을 뺀다 (옵션 exclude_files: 파일 이름 목록)
+    exclude = set(options.get("exclude_files") or [])
+    if exclude:
+        files = [f for f in files if f["name"] not in exclude]
+        log(f"제외한 파일: {', '.join(sorted(exclude))}")
     if not files:
         emit({"type": "error", "message": "영상 파일을 찾을 수 없습니다."})
         sys.exit(1)
@@ -706,6 +718,9 @@ def main():
                 with open(fcpxml_path, "w", encoding="utf-8") as ff:
                     ff.write(fcpxml_content)
                 log(f"FCPXML 생성: {fcpxml_path}")
+
+            _save_edit_json(srt_path, folder_path, ai_engine, target_minutes, edl_fps, files, validated,
+                            edl_path, fcpxml_path)
 
             elapsed = time.time() - t_start
             speech_sec, nonspeech_sec = calc_keep_breakdown(validated, all_window_data)
@@ -1179,6 +1194,9 @@ def main():
                 ff.write(fcpxml_content)
             log(f"FCPXML 생성: {fcpxml_path}")
 
+        _save_edit_json(srt_path, folder_path, ai_engine, target_minutes, edl_fps, files, validated,
+                        edl_path, fcpxml_path)
+
         # 완료
         elapsed = time.time() - t_start
         speech_sec, nonspeech_sec = calc_keep_breakdown(validated, all_window_data)
@@ -1215,6 +1233,30 @@ def format_srt_time(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _save_edit_json(srt_path: str, folder_path: str, ai_engine: str, target_minutes: int, fps: float,
+                    files: list[dict], segments: list[dict], edl_path: str | None, fcpxml_path: str | None):
+    """컷 목록 전체 + 파일 정보를 SRT 와 같은 이름으로 남긴다 (`<stem>_edit.json`).
+
+    SRT·EDL·FCPXML 에는 역할·막·비트 같은 필드가 빠진다. 자동화 도구(video-pipeline)가 이 파일을 이어서 쓴다.
+    """
+    edit_path = srt_path.replace(".srt", "_edit.json")
+    with open(edit_path, "w", encoding="utf-8") as jf:
+        json.dump({
+            "version": 1,
+            "folder": os.path.abspath(folder_path),
+            "aiEngine": ai_engine,
+            "targetMinutes": target_minutes,
+            "fps": fps,
+            "files": files,
+            "segments": segments,
+            "srtPath": srt_path,
+            "edlPath": edl_path,
+            "fcpxmlPath": fcpxml_path,
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, jf, ensure_ascii=False, indent=2)
+    log(f"컷 목록 저장: {edit_path}")
 
 
 def _save_story_plan(srt_path: str, plan: dict, md: str):
