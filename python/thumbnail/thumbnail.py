@@ -265,8 +265,9 @@ CONCEPT_GUIDE = (
     "- 이 영상만의 사건·갈등이 한눈에 보이는 것 (시놉시스의 '가장 보여주고 싶은 것'을 우선)\n"
     "- 표정·몸짓이 살아 있는 인물 장면, 결과물이 완성된 장면, 분위기 있는 풍경·불·음식 장면처럼 시각적으로 강한 것\n"
     "- 클릭하고 싶게 만드는 궁금증 (단, 영상에 없는 일을 꾸며 내지 않는다)\n"
-    "- 스타일을 섞는다: 절반쯤은 핵심 사건 한 방(style=event), 나머지는 브이로그형 포인트 나열(style=points — "
-    "그날의 볼거리 3~4개를 짧게 늘어놓아 '이 영상에 이런 게 다 있다'를 보여 줌. 배경은 그날 분위기가 잘 드러나는 넓은 장면)\n"
+    "- 각도를 섞는다: 절반쯤은 핵심 사건 하나에 집중하고, 나머지는 브이로그답게 그날 하루의 흐름 · 분위기를 아우르는 내용 "
+    "(고생 끝에 맞은 저녁, 비 갠 아침의 여유처럼). 아우르더라도 썸네일 문구는 한 문장처럼 읽혀야 한다 — "
+    "항목을 번호 · 쉼표 · 가운뎃점으로 늘어놓지 않는다\n"
     f"- {CONCEPT_COUNT}개는 각기 다른 각도 (예: 사건/고생, 감성/풍경, 결과/성취, 인물/표정, 반전/대비)\n\n"
     "후보 장면 고르기:\n"
     "- 장면 설명만 보고 고르므로, 한 콘셉트에 후보를 4개씩 넉넉히 고른다 (서로 다른 시점)\n"
@@ -285,8 +286,6 @@ CONCEPT_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "angle": {"type": "string", "description": "콘셉트 이름 (짧게, 예: '입으로 텐트 세우기')"},
-                    "style": {"type": "string", "enum": ["event", "points"],
-                              "description": "event=핵심 사건 한 방, points=브이로그형 포인트 3~4개 나열"},
                     "idea": {"type": "string", "description": "썸네일이 무엇을 보여 주고 어떤 궁금증을 주는지 1~2문장"},
                     "candidates": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"type": "string"},
                                    "description": "후보 장면 번호 (예: 'W166' 또는 'F12')"},
@@ -435,10 +434,7 @@ COPY_SCHEMA = {
                 "properties": {
                     "concept": {"type": "integer", "description": "콘셉트 번호 (1부터)"},
                     "frame": {"type": "string", "description": "고른 후보 프레임 번호 (예: '2-3')"},
-                    "layout": {"type": "string", "enum": ["headline", "points"],
-                               "description": "headline=큰 문구 1~2줄, points=포인트 나열 (콘셉트 style 이 points 면 points)"},
-                    "headline": {"type": "string", "description": "썸네일 큰 문구. 한 줄 8자 안팎, 최대 2줄 (줄바꿈은 \\n). "
-                                 "layout=points 면 포인트 3~4개를 한 줄에 하나씩 (각 9자 이내, 번호 없이)"},
+                    "headline": {"type": "string", "description": "썸네일 큰 문구. 한 줄 8자 안팎, 최대 2줄 (줄바꿈은 \\n)"},
                     "subline": {"type": "string", "description": "작은 보조 문구 (없으면 빈 문자열), 14자 이내"},
                     "highlight": {"type": "string", "description": "headline 안에서 강조색으로 칠할 단어 (headline 에 그대로 있는 부분 문자열, 없으면 빈 문자열)"},
                     "position": {"type": "string", "enum": POSITIONS, "description": "문구 위치 — 피사체(얼굴·핵심 물체)를 가리지 않는 빈 쪽"},
@@ -449,7 +445,7 @@ COPY_SCHEMA = {
                     "hashtags": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 6},
                     "reason": {"type": "string", "description": "이 프레임과 문구를 고른 이유 1문장"},
                 },
-                "required": ["concept", "frame", "layout", "headline", "subline", "highlight", "position", "color",
+                "required": ["concept", "frame", "headline", "subline", "highlight", "position", "color",
                              "font", "title", "description", "hashtags", "reason"],
             },
         }
@@ -465,9 +461,7 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         if not ids:
             continue
         files = "\n".join(f"  - {fid}: {candidates[fid]['preview']}" for fid in ids)
-        style = "포인트 나열" if c.get("style") == "points" else "핵심 사건"
-        blocks.append(f"### 콘셉트 {ci}. {c.get('angle', '')} (style={c.get('style', 'event')}, {style})\n"
-                      f"{c.get('idea', '')}\n후보 프레임:\n{files}")
+        blocks.append(f"### 콘셉트 {ci}. {c.get('angle', '')}\n{c.get('idea', '')}\n후보 프레임:\n{files}")
     prompt = (
         "당신은 한국 캠핑·아웃도어 유튜브 채널의 썸네일·제목 담당입니다.\n"
         "아래 후보 프레임 이미지를 Read 도구로 모두 직접 보고, 콘셉트마다 썸네일 배경으로 가장 좋은 한 장을 고른 뒤 "
@@ -475,8 +469,7 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         "프레임 고르기: 초점이 맞고, 피사체가 크고 분명하며, 문구를 얹을 빈 공간이 있는 장면. "
         "콘셉트 설명보다 실제 이미지가 우선이다 — 설명과 다른 장면이면 콘셉트에 맞는 다른 후보를 고른다.\n"
         "썸네일 문구: 휴대폰 작은 화면에서도 읽히게 짧고 굵게. 제목을 그대로 반복하지 말고 제목과 짝을 이루게 쓴다. "
-        "콘셉트 style 이 points 면 layout=points 로, 그날의 포인트 3~4개를 영상 순서대로 짧게 쓰고 subline 에 묶는 말"
-        "(예: '1박 캠핑 브이로그')을 둔다. 제목도 포인트를 이어 붙인 브이로그형으로 쓸 수 있다. "
+        "그날 하루를 아우르는 콘셉트라도 문구는 자연스러운 한 문장(1~2줄)으로 쓰고, 항목을 나열하지 않는다. "
         "영상에 실제로 있는 일만 쓴다 (과장은 되지만 거짓은 안 된다). "
         "문구가 말하는 것이 고른 프레임에 보여야 한다 (예: '맑은 아침'이라 쓰면 밝은 하늘이 보이는 프레임). "
         "시간·횟수 같은 숫자는 시놉시스에 적힌 것만 쓴다 — AI 편집 설계의 분량(몇 분짜리)은 실제 걸린 시간이 아니다.\n"
@@ -531,14 +524,11 @@ def fit_cover(img: Image.Image, w: int, h: int) -> Image.Image:
 
 def normalize_text(text: dict) -> dict:
     headline = str(text.get("headline") or "").replace("\\n", "\n").strip()
-    lines = [ln.strip() for ln in headline.split("\n") if ln.strip()]
-    layout = "points" if text.get("layout") == "points" and len(lines) >= 2 else "headline"
-    lines = lines[:4] if layout == "points" else lines[:3]
+    lines = [ln.strip() for ln in headline.split("\n") if ln.strip()][:3]
     position = text.get("position") if text.get("position") in POSITIONS else "bottom-left"
     color = text.get("color") if text.get("color") in COLORS else "yellow"
     font = text.get("font") if text.get("font") in FONTS else "dohyeon"
     return {
-        "layout": layout,
         "headline": "\n".join(lines),
         "subline": str(text.get("subline") or "").strip(),
         "highlight": str(text.get("highlight") or "").strip(),
@@ -569,9 +559,6 @@ def compose(raw: Image.Image, text: dict) -> Image.Image:
 
     if not lines and not t["subline"]:
         return img.convert("RGB")
-
-    if t["layout"] == "points":
-        return compose_points(img, t, lines, accent, vert).convert("RGB")
 
     margin = 56
     max_w = W - margin * 2
@@ -634,58 +621,6 @@ def compose(raw: Image.Image, text: dict) -> Image.Image:
     for cx, ly, seg, col in runs:
         draw.text((cx, ly), seg, font=font, fill=col, stroke_width=stroke, stroke_fill=(0, 0, 0))
     return img.convert("RGB")
-
-
-def compose_points(img: Image.Image, t: dict, lines: list[str], accent: tuple, vert: str) -> Image.Image:
-    """브이로그형: 번호 붙은 반투명 띠를 줄마다 쌓는다 (화면 폭의 60% 안쪽 — 배경이 보이게)."""
-    W, H = img.size
-    horiz = t["position"].split("-")[1]
-    margin, pad, gap = 48, 22, 14
-    size = 76
-    while size > 40:
-        font = load_font(t["font"], size)
-        box_h = int(size * 1.42)
-        widest = max(font.getlength(ln) for ln in lines) + box_h + pad * 2
-        sub_font = load_font(t["font"], max(32, int(size * 0.62)))
-        sub_h = (sub_font.size + 24) if t["subline"] else 0
-        block_h = sub_h + (gap if sub_h else 0) + len(lines) * box_h + (len(lines) - 1) * gap
-        if widest <= W * 0.6 and block_h <= H - margin * 2:
-            break
-        size -= 4
-    font = load_font(t["font"], size)
-    box_h = int(size * 1.42)
-    sub_font = load_font(t["font"], max(32, int(size * 0.62)))
-    sub_h = (sub_font.size + 24) if t["subline"] else 0
-    block_h = sub_h + (gap if sub_h else 0) + len(lines) * box_h + (len(lines) - 1) * gap
-    y = margin if vert == "top" else H - margin - block_h
-    ink = (0, 0, 0) if t["color"] != "red" else (255, 255, 255)
-
-    def x_for(width: float) -> float:
-        if horiz == "left":
-            return margin
-        if horiz == "right":
-            return W - margin - width
-        return (W - width) / 2
-
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    if t["subline"]:
-        sw = sub_font.getlength(t["subline"]) + 28
-        sx = x_for(sw)
-        draw.rounded_rectangle([sx, y, sx + sw, y + sub_h], radius=10, fill=accent + (255,))
-        draw.text((sx + 14, y + sub_h / 2), t["subline"], font=sub_font, fill=ink, anchor="lm")
-        y += sub_h + gap
-    num_font = load_font(t["font"], int(size * 0.8))
-    for i, ln in enumerate(lines, 1):
-        w = box_h + pad + font.getlength(ln) + pad
-        x = x_for(w)
-        draw.rounded_rectangle([x, y, x + w, y + box_h], radius=12, fill=(0, 0, 0, 190))
-        draw.rounded_rectangle([x, y, x + box_h, y + box_h], radius=12, fill=accent + (255,))
-        draw.text((x + box_h / 2, y + box_h / 2), str(i), font=num_font, fill=ink, anchor="mm")
-        draw.text((x + box_h + pad, y + box_h / 2), ln, font=font, fill=(255, 255, 255), anchor="lm",
-                  stroke_width=max(2, size // 22), stroke_fill=(0, 0, 0))
-        y += box_h + gap
-    return Image.alpha_composite(img, layer)
 
 
 # ── 명령 ──
@@ -870,8 +805,7 @@ def cmd_compose(folder: str, item_id: int, text_json: str) -> None:
     except json.JSONDecodeError:
         fail("문구 데이터를 읽지 못했습니다")
     text = normalize_text({**item.get("text", {}), **{k: v for k, v in patch.items() if k in
-                                                    ("layout", "headline", "subline", "highlight", "position", "color",
-                                                     "font")}})
+                                                    ("headline", "subline", "highlight", "position", "color", "font")}})
     for key in ("title", "description"):
         if isinstance(patch.get(key), str):
             item[key] = patch[key].strip()
