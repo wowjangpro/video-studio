@@ -52,13 +52,43 @@ COLORS = {
     "cyan": (0, 214, 255),
     "green": (52, 230, 120),
     "white": (255, 255, 255),
+    "pink": (255, 120, 170),
+    "mint": (120, 230, 200),
+    "cream": (255, 240, 200),
+    "navy": (30, 50, 110),
 }
-# 사용자 맥에 깔린 굵은 한글 글꼴. 없으면 Apple SD Gothic Neo Heavy 로 대신한다.
+# 저작권 무료(상업 · 영상 사용 가능) 글꼴만 쓴다 — 맥 기본 글꼴(Apple SD 고딕 · 애플명조 등)은 쓰지 않는다
+# (사용자 지시 2026-11-22). 라이선스: 배민 글꼴 · 카페24 · 교보손글씨 2020 = 영리 사용 가능(파일 판매 금지),
+# 나눔스퀘어라운드 = OFL, 강원교육모두 = 강원도교육청 무료 배포. 영상 조항이 불분명한 더잠실 · 조선100년체는 뺐다.
 FONTS = {
     "dohyeon": ("~/Library/Fonts/BMDOHYEON_otf.otf", 0),
     "hanna": ("~/Library/Fonts/BMHANNAProOTF.otf", 0),
+    "jua": ("~/Library/Fonts/BMJUA_otf.otf", 0),
+    "yeonsung": ("~/Library/Fonts/BMYEONSUNG_otf.otf", 0),
+    "kirang": ("~/Library/Fonts/BMKIRANGHAERANG-OTF.otf", 0),
+    "euljiro": ("~/Library/Fonts/BMEULJIRO.otf", 0),
     "ssurround": ("~/Library/Fonts/Cafe24Ssurround-v2.0.otf", 0),
-    "gothic": ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 16),
+    "prettynight": ("~/Library/Fonts/Cafe24Oneprettynight-v2.0.otf", 0),
+    "kyobo": ("~/Library/Fonts/KyoboHandwriting2020pdy.otf", 0),
+    "nanumsquare": ("~/Library/Fonts/NanumSquareRoundOTFEB.otf", 0),
+    "nanumsquare_light": ("~/Library/Fonts/NanumSquareRoundOTFL.otf", 0),
+    "gangwon": ("~/Library/Fonts/강원교육모두 Bold.otf", 0),
+    "gangwon_light": ("~/Library/Fonts/강원교육모두 Light.otf", 0),
+}
+FALLBACK_FONT = "nanumsquare"
+FONT_FEEL = ("dohyeon=굵고 단단 · hanna=둥글고 친근 · jua=둥근 굵은 · yeonsung=붓글씨 느낌 · kirang=레트로 손글씨 · "
+             "euljiro=레트로 간판 · ssurround=귀엽고 통통 · prettynight=여린 감성 손글씨 · kyobo=담백한 손글씨 · "
+             "nanumsquare=깔끔한 둥근 고딕(굵게) · nanumsquare_light=얇고 세련된 고딕 · gangwon=채널 자막 글꼴(부드러운 고딕) · "
+             "gangwon_light=채널 자막 글꼴 얇게")
+# 문구 스타일 — 한 가지 틀로 고정하지 않는다 (사용자: "템플릿으로 고정해 놓은 것 같은데 더 다양하게", 2026-11-22)
+STYLES = {
+    "stroke": "흰 굵은 글씨 + 검은 테두리 · 그림자, 강조 단어만 색 — 가장 눈에 띄는 기본형",
+    "band": "줄마다 색 띠(강조색) 위에 진한 글씨 — 잡지 · 라벨 느낌",
+    "soft": "테두리 없이 흰 글씨 + 부드러운 그림자, 조금 작게 — 감성 · 잔잔한 분위기 (손글씨 · 얇은 글꼴과 잘 맞음)",
+    "pop": "강조색으로 채운 글씨 + 두꺼운 흰 테두리 — 통통 튀는 귀여운 느낌",
+    "contrast": "첫 줄 작게, 둘째 줄 아주 크게 — 크기 대비로 한 단어를 꽂는다",
+    "cinema": "반투명 검은 상자 안에 가운데 정렬, 위아래 얇은 선 — 영화 자막 · 타이틀 카드 느낌",
+    "minimal": "모서리에 작은 글씨와 얇은 선 하나 — 풍경을 살리는 여백 많은 스타일",
 }
 
 
@@ -344,7 +374,7 @@ def plan_from_windows(analysis: dict, ctx: str) -> tuple[list[dict], dict]:
 def make_contact_sheets(frames: list[tuple[str, Image.Image, float]], tmp: str, per_sheet: int = 12) -> list[str]:
     """번호를 박은 밀착 인화지 (가로 4칸)"""
     cols, cw, ch = 4, 480, 270
-    font = load_font("gothic", 30)
+    font = load_font(FALLBACK_FONT, 30)
     sheets = []
     for s in range(0, len(frames), per_sheet):
         chunk = frames[s:s + per_sheet]
@@ -440,13 +470,15 @@ COPY_SCHEMA = {
                     "highlight": {"type": "string", "description": "headline 안에서 강조색으로 칠할 단어 (headline 에 그대로 있는 부분 문자열, 없으면 빈 문자열)"},
                     "position": {"type": "string", "enum": POSITIONS, "description": "문구 위치 — 피사체(얼굴·핵심 물체)를 가리지 않는 빈 쪽"},
                     "color": {"type": "string", "enum": list(COLORS), "description": "강조색"},
-                    "font": {"type": "string", "enum": list(FONTS), "description": "글꼴 느낌: dohyeon=굵고 단단함, hanna=둥글고 친근함, ssurround=귀엽고 통통, gothic=깔끔한 고딕"},
+                    "font": {"type": "string", "enum": list(FONTS), "description": "글꼴 느낌: " + FONT_FEEL},
+                    "style": {"type": "string", "enum": list(STYLES),
+                              "description": "문구 스타일: " + " · ".join(f"{k}={v}" for k, v in STYLES.items())},
                     "title": {"type": "string", "description": "유튜브 제목 (40자 안팎, 최대 70자 — 제목 형식이 주어지면 그 형식, 최대 100자)"},
                     "description": {"type": "string", "description": "유튜브 설명 (3~6문장, 줄바꿈 허용)"},
                     "hashtags": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 6},
                     "reason": {"type": "string", "description": "이 프레임과 문구를 고른 이유 1문장"},
                 },
-                "required": ["concept", "frame", "headline", "subline", "highlight", "position", "color",
+                "required": ["concept", "frame", "style", "headline", "subline", "highlight", "position", "color",
                              "font", "title", "description", "hashtags", "reason"],
             },
         }
@@ -469,12 +501,17 @@ def write_copy(concepts: list[dict], candidates: dict[str, dict], ctx: str) -> l
         "그 위에 얹을 문구와 유튜브 제목·설명을 쓰세요.\n\n"
         "프레임 고르기: 초점이 맞고, 피사체가 크고 분명하며, 문구를 얹을 빈 공간이 있는 장면. "
         "콘셉트 설명보다 실제 이미지가 우선이다 — 설명과 다른 장면이면 콘셉트에 맞는 다른 후보를 고른다.\n"
-        "썸네일 문구: 휴대폰 작은 화면에서도 읽히게 짧고 굵게. 제목을 그대로 반복하지 말고 제목과 짝을 이루게 쓴다. "
+        "썸네일 문구: 이미지 속 장면을 설명할 필요는 없다 — 타이틀 이미지 전체(사진 + 글)가 영상 전체의 느낌 · 분위기를 "
+        "전하도록 쓴다 (예: 계곡 사진에 '오늘은 아무것도 안 하기로'). 휴대폰 작은 화면에서도 읽히게 짧게. "
+        "제목을 그대로 반복하지 않는다. "
+        "글 스타일(style) · 글꼴 · 색 · 위치는 장마다 다르게 — 같은 조합을 되풀이하지 말고 사진의 분위기에 맞춰 고른다 "
+        "(잔잔한 풍경엔 soft · minimal · cinema 와 손글씨 · 얇은 글꼴, 사건 · 웃음엔 stroke · pop · contrast 처럼). "
         "그날 하루를 아우르는 콘셉트라도 문구는 자연스러운 한 문장(1~2줄)으로 쓰고, 항목을 나열하지 않는다. "
         "영상에 실제로 있는 일만 쓴다 (과장은 되지만 거짓은 안 된다). "
         "문구가 말하는 것이 고른 프레임에 보여야 한다 (예: '맑은 아침'이라 쓰면 밝은 하늘이 보이는 프레임). "
         "시간·횟수 같은 숫자는 시놉시스에 적힌 것만 쓴다 — AI 편집 설계의 분량(몇 분짜리)은 실제 걸린 시간이 아니다.\n"
-        f"제목: 검색될 단어(캠핑, 지명·장비 등 실제로 나오는 것)를 자연스럽게 넣고, {CONCEPT_COUNT}개 안의 제목이 서로 달라야 한다. "
+        f"제목: 썸네일 문구 · 콘셉트와 같을 필요 없다 — 영상 전체의 내용을 설명한다. 검색될 단어(캠핑, 지명·장비 등 실제로 "
+        f"나오는 것)를 자연스럽게 넣고, {CONCEPT_COUNT}개 안의 제목이 서로 달라야 한다. "
         "이모지는 쓰지 않는다.\n"
         + (f"제목 형식: 이 채널의 기존 제목 형식을 반드시 따른다 (구분 기호 · 구절 수 · 말투 · 끝 구절). "
            f"이때 제목 길이는 최대 100자.\n{TITLE_STYLE}\n" if TITLE_STYLE else "")
@@ -505,13 +542,13 @@ def load_font(name: str, size: int) -> ImageFont.FreeTypeFont:
     key = (name, size)
     if key in _font_cache:
         return _font_cache[key]
-    path, index = FONTS.get(name, FONTS["gothic"])
+    path, index = FONTS.get(name, FONTS[FALLBACK_FONT])
     path = os.path.expanduser(path)
     try:
         font = ImageFont.truetype(path, size, index=index)
     except OSError:
-        gpath, gindex = FONTS["gothic"]
-        font = ImageFont.truetype(gpath, size, index=gindex)
+        gpath, gindex = FONTS[FALLBACK_FONT]
+        font = ImageFont.truetype(os.path.expanduser(gpath), size, index=gindex)
     _font_cache[key] = font
     return font
 
@@ -531,7 +568,9 @@ def normalize_text(text: dict) -> dict:
     position = text.get("position") if text.get("position") in POSITIONS else "bottom-left"
     color = text.get("color") if text.get("color") in COLORS else "yellow"
     font = text.get("font") if text.get("font") in FONTS else "dohyeon"
+    style = text.get("style") if text.get("style") in STYLES else "stroke"
     return {
+        "style": style,
         "headline": "\n".join(lines),
         "subline": str(text.get("subline") or "").strip(),
         "highlight": str(text.get("highlight") or "").strip(),
@@ -562,6 +601,10 @@ def compose(raw: Image.Image, text: dict) -> Image.Image:
 
     if not lines and not t["subline"]:
         return img.convert("RGB")
+    if t["style"] != "stroke":
+        if not lines:                       # 큰 문구가 없으면 보조 문구를 큰 문구로
+            lines, t = [t["subline"]], {**t, "subline": ""}
+        return STYLE_FUNCS[t["style"]](img, t, lines, accent, vert, horiz).convert("RGB")
 
     margin = 56
     max_w = W - margin * 2
@@ -624,6 +667,179 @@ def compose(raw: Image.Image, text: dict) -> Image.Image:
     for cx, ly, seg, col in runs:
         draw.text((cx, ly), seg, font=font, fill=col, stroke_width=stroke, stroke_fill=(0, 0, 0))
     return img.convert("RGB")
+
+
+# ── 다른 문구 스타일 (stroke 는 compose 안의 기본형) ──
+
+def _fit(font_name: str, lines: list[str], start: int, max_w: float, floor: int = 40) -> ImageFont.FreeTypeFont:
+    size = start
+    while size > floor:
+        f = load_font(font_name, size)
+        if max(f.getlength(ln) for ln in lines) <= max_w:
+            return f
+        size -= 4
+    return load_font(font_name, floor)
+
+
+def _x(horiz: str, W: int, w: float, margin: int) -> float:
+    return margin if horiz == "left" else (W - margin - w if horiz == "right" else (W - w) / 2)
+
+
+def _ink(color: str) -> tuple:
+    return (255, 255, 255) if color in ("red", "navy") else (20, 20, 20)
+
+
+def _shadowed(img: Image.Image, draw_fn, blur: int, alpha: int = 160) -> Image.Image:
+    """draw_fn(draw, fill) 로 그린 모양을 흐린 그림자로 먼저 깔고 본 그림을 얹는다."""
+    sh = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw_fn(ImageDraw.Draw(sh), (0, 0, 0, alpha))
+    img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(blur)))
+    draw_fn(ImageDraw.Draw(img), None)
+    return img
+
+
+def style_band(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    m, pad = 56, 18
+    font = _fit(t["font"], lines, {1: 120, 2: 100}.get(len(lines), 84), W * 0.62 - pad * 2)
+    sub = load_font(t["font"], max(30, int(font.size * 0.42)))
+    lh = int(font.size * 1.25)
+    block = lh * len(lines) + (sub.size + 26 if t["subline"] else 0)
+    y = m if vert == "top" else H - m - block
+    d = ImageDraw.Draw(img)
+    if t["subline"]:
+        sw = sub.getlength(t["subline"])
+        x = _x(horiz, W, sw, m)
+        d.text((x, y), t["subline"], font=sub, fill=(255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0))
+        y += sub.size + 26
+    for k, ln in enumerate(lines):
+        w = font.getlength(ln) + pad * 2
+        x = _x(horiz, W, w, m)
+        fill = accent if k % 2 == 0 else (255, 255, 255)
+        ink = _ink(t["color"]) if k % 2 == 0 else (20, 20, 20)
+        d.rectangle([x, y, x + w, y + lh - 6], fill=fill + (255,))
+        d.text((x + pad, y + (lh - 6) / 2), ln, font=font, fill=ink, anchor="lm")
+        y += lh
+    return img
+
+
+def style_soft(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    m = 64
+    font = _fit(t["font"], lines, {1: 110, 2: 92}.get(len(lines), 76), W * 0.7)
+    sub = load_font(t["font"], max(28, int(font.size * 0.38)))
+    lh = int(font.size * 1.3)
+    block = lh * len(lines) + (sub.size + 20 if t["subline"] else 0)
+    y0 = m if vert == "top" else H - m - block
+
+    def draw(d, fill):
+        y = y0
+        for ln in lines:
+            d.text((_x(horiz, W, font.getlength(ln), m), y), ln, font=font, fill=fill or (255, 255, 255))
+            y += lh
+        if t["subline"]:
+            d.text((_x(horiz, W, sub.getlength(t["subline"]), m), y + 8), t["subline"], font=sub,
+                   fill=fill or accent)
+    return _shadowed(img, draw, blur=max(6, font.size // 10), alpha=190)
+
+
+def style_pop(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    m = 52
+    font = _fit(t["font"], lines, {1: 160, 2: 128}.get(len(lines), 104), W - m * 2)
+    sub = load_font(t["font"], max(32, int(font.size * 0.36)))
+    lh = int(font.size * 1.1)
+    stroke = max(8, font.size // 9)
+    block = lh * len(lines) + (sub.size + 24 if t["subline"] else 0)
+    y0 = m if vert == "top" else H - m - block
+
+    def draw(d, fill):
+        y = y0
+        if t["subline"]:
+            d.text((_x(horiz, W, sub.getlength(t["subline"]), m), y), t["subline"], font=sub,
+                   fill=fill or (255, 255, 255), stroke_width=4, stroke_fill=fill or (0, 0, 0))
+            y += sub.size + 24
+        for ln in lines:
+            d.text((_x(horiz, W, font.getlength(ln), m), y), ln, font=font, fill=fill or accent,
+                   stroke_width=stroke, stroke_fill=fill or (255, 255, 255))
+            y += lh
+    return _shadowed(img, draw, blur=stroke, alpha=150)
+
+
+def style_contrast(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    m = 56
+    if len(lines) == 1:
+        lines = [t["subline"] or "", lines[0]] if t["subline"] else ["", lines[0]]
+    small, big = lines[0], " ".join(lines[1:])
+    bf = _fit(t["font"], [big], 190, W - m * 2)
+    sf = _fit(t["font"], [small or " "], int(bf.size * 0.42), W - m * 2, floor=28)
+    stroke = max(5, bf.size // 12)
+    block = (sf.size + 10 if small else 0) + int(bf.size * 1.05)
+    y0 = m if vert == "top" else H - m - block
+
+    def draw(d, fill):
+        y = y0
+        if small:
+            d.text((_x(horiz, W, sf.getlength(small), m), y), small, font=sf, fill=fill or (255, 255, 255),
+                   stroke_width=3, stroke_fill=fill or (0, 0, 0))
+            y += sf.size + 10
+        d.text((_x(horiz, W, bf.getlength(big), m), y), big, font=bf, fill=fill or accent,
+               stroke_width=stroke, stroke_fill=fill or (0, 0, 0))
+    return _shadowed(img, draw, blur=stroke, alpha=150)
+
+
+def style_cinema(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    font = _fit(t["font"], lines, {1: 92, 2: 78}.get(len(lines), 64), W * 0.78)
+    sub = load_font(t["font"], max(26, int(font.size * 0.4)))
+    lh = int(font.size * 1.3)
+    inner = lh * len(lines) + (sub.size + 18 if t["subline"] else 0)
+    box_w = max(font.getlength(ln) for ln in lines) + 120
+    box_h = inner + 70
+    x0 = (W - box_w) / 2
+    y0 = 70 if vert == "top" else (H - box_h - 70 if vert == "bottom" else (H - box_h) / 2)
+    over = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(over)
+    od.rectangle([x0, y0, x0 + box_w, y0 + box_h], fill=(0, 0, 0, 150))
+    img = Image.alpha_composite(img, over)
+    d = ImageDraw.Draw(img)
+    d.line([x0 + 40, y0 + 14, x0 + box_w - 40, y0 + 14], fill=accent + (255,), width=2)
+    d.line([x0 + 40, y0 + box_h - 14, x0 + box_w - 40, y0 + box_h - 14], fill=accent + (255,), width=2)
+    y = y0 + 35
+    for ln in lines:
+        d.text((W / 2, y), ln, font=font, fill=(255, 255, 255), anchor="ma")
+        y += lh
+    if t["subline"]:
+        d.text((W / 2, y + 4), t["subline"], font=sub, fill=accent, anchor="ma")
+    return img
+
+
+def style_minimal(img, t, lines, accent, vert, horiz):
+    W, H = img.size
+    m = 60
+    font = _fit(t["font"], lines, {1: 72, 2: 62}.get(len(lines), 54), W * 0.5)
+    sub = load_font(t["font"], max(24, int(font.size * 0.45)))
+    lh = int(font.size * 1.3)
+    block = lh * len(lines) + 24 + (sub.size if t["subline"] else 0)
+    y0 = m if vert == "top" else H - m - block
+    w = max(font.getlength(ln) for ln in lines)
+
+    def draw(d, fill):
+        y = y0
+        for ln in lines:
+            d.text((_x(horiz, W, font.getlength(ln), m), y), ln, font=font, fill=fill or (255, 255, 255))
+            y += lh
+        lx = _x(horiz, W, min(w, 160), m)
+        d.line([lx, y + 6, lx + min(w, 160), y + 6], fill=fill or accent, width=3)
+        if t["subline"]:
+            d.text((_x(horiz, W, sub.getlength(t["subline"]), m), y + 18), t["subline"], font=sub,
+                   fill=fill or (235, 235, 235))
+    return _shadowed(img, draw, blur=6, alpha=170)
+
+
+STYLE_FUNCS = {"band": style_band, "soft": style_soft, "pop": style_pop, "contrast": style_contrast,
+               "cinema": style_cinema, "minimal": style_minimal}
 
 
 # ── 명령 ──
@@ -808,7 +1024,8 @@ def cmd_compose(folder: str, item_id: int, text_json: str) -> None:
     except json.JSONDecodeError:
         fail("문구 데이터를 읽지 못했습니다")
     text = normalize_text({**item.get("text", {}), **{k: v for k, v in patch.items() if k in
-                                                    ("headline", "subline", "highlight", "position", "color", "font")}})
+                                                    ("style", "headline", "subline", "highlight", "position", "color",
+                                                     "font")}})
     for key in ("title", "description"):
         if isinstance(patch.get(key), str):
             item[key] = patch[key].strip()
