@@ -13,7 +13,8 @@ interface ModuleResources {
 const MODULE_GPU_REQUIREMENTS: Record<ModuleName, number> = {
   autocut: 21,  // qwen2.5vl:7b + qwen3:14b
   subtitle: 14, // qwen2.5:14b
-  bgm: 0        // 추천은 Claude + CLAP(MPS) 만 쓴다 — Ollama 를 쓰지 않음
+  bgm: 0,       // 추천은 Claude + CLAP(MPS) 만 쓴다 — Ollama 를 쓰지 않음
+  thumbnail: 0  // Claude + FFmpeg 만 쓴다
 }
 
 const GPU_MEMORY_LIMIT = 32 // Apple Silicon 통합 메모리
@@ -49,7 +50,8 @@ class ResourceManager {
       const moduleNames: Record<ModuleName, string> = {
         autocut: 'AI 편집',
         subtitle: '자막 추출',
-        bgm: 'BGM 추천'
+        bgm: 'BGM 추천',
+        thumbnail: '썸네일'
       }
       const runningNames = currentModules.map((m) => moduleNames[m]).join(', ')
       return {
@@ -98,7 +100,8 @@ class ResourceManager {
       const status: Record<ModuleName, boolean> = {
         autocut: this.activeModules.has('autocut'),
         subtitle: this.activeModules.has('subtitle'),
-        bgm: this.activeModules.has('bgm')
+        bgm: this.activeModules.has('bgm'),
+        thumbnail: this.activeModules.has('thumbnail')
       }
       win.webContents.send('resource-status', status)
     }

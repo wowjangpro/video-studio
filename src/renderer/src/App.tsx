@@ -4,6 +4,7 @@ import TabBar from './common/TabBar'
 import AutocutModule from './autocut/AutocutModule'
 import SubtitleModule from './subtitle/SubtitleModule'
 import BgmModule from './bgm/BgmModule'
+import ThumbnailModule from './thumbnail/ThumbnailModule'
 
 export default function App(): JSX.Element {
   const activeModule = useAppStore((s) => s.activeModule)
@@ -35,6 +36,9 @@ export default function App(): JSX.Element {
         </div>
         <div style={{ display: activeModule === 'bgm' ? 'contents' : 'none' }}>
           <BgmModule />
+        </div>
+        <div style={{ display: activeModule === 'thumbnail' ? 'contents' : 'none' }}>
+          <ThumbnailModule />
         </div>
       </main>
       {conflictMessage && (

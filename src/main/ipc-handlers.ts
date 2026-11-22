@@ -5,6 +5,7 @@ import { resourceManager } from './services/resource-manager'
 import { registerAutocutIpc, cleanupAutocutProcess } from './modules/autocut/ipc'
 import { registerSubtitleIpc, cleanupSubtitleProcess } from './modules/subtitle/ipc'
 import { registerBgmIpc, cleanupBgmProcess } from './modules/bgm/ipc'
+import { registerThumbnailIpc, cleanupThumbnailProcess } from './modules/thumbnail/ipc'
 
 export function getMainWindow(): BrowserWindow | null {
   const windows = BrowserWindow.getAllWindows()
@@ -41,10 +42,12 @@ export function registerIpcHandlers(): void {
   registerAutocutIpc()
   registerSubtitleIpc()
   registerBgmIpc()
+  registerThumbnailIpc()
 }
 
 export function cleanupAllProcesses(): void {
   cleanupAutocutProcess()
   cleanupSubtitleProcess()
   cleanupBgmProcess()
+  cleanupThumbnailProcess()
 }

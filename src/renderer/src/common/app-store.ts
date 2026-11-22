@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ModuleName = 'autocut' | 'subtitle' | 'bgm'
+export type ModuleName = 'autocut' | 'subtitle' | 'bgm' | 'thumbnail'
 
 interface AppState {
   activeModule: ModuleName
@@ -17,7 +17,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   activeModule: 'autocut',
-  moduleStatus: { autocut: 'idle', subtitle: 'idle', bgm: 'idle' },
+  moduleStatus: { autocut: 'idle', subtitle: 'idle', bgm: 'idle', thumbnail: 'idle' },
   healthOk: true,
   healthMissing: [],
   conflictMessage: null,

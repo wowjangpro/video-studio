@@ -1,24 +1,10 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import { ChildProcess } from 'child_process'
-import { runPythonScript } from '../../services/python'
+import { runPythonOnce, killProcessGroup, type PythonJson } from '../../services/python'
 import { sendToRenderer } from '../../ipc-handlers'
 
 // 지금 돌고 있는 곡 추천 (취소할 수 있는 긴 작업은 이것 하나)
 let recommendProcess: ChildProcess | null = null
-
-/**
- * Python 은 detached(자기 프로세스 그룹)로 뜬다. 그룹 전체에 보내야 Python 이 띄운 `claude -p` 까지 멈춘다
- * (Python 에만 보내면 Claude 호출이 끝까지 돌며 비용이 나간다).
- */
-function killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): void {
-  if (proc.pid) {
-    try {
-      process.kill(-proc.pid, signal)
-      return
-    } catch { /* 그룹 kill 실패 시 단일 프로세스 kill 시도 */ }
-  }
-  try { proc.kill(signal) } catch { /* ignore */ }
-}
 
 function killRecommend(): void {
   if (recommendProcess) {
@@ -27,12 +13,8 @@ function killRecommend(): void {
   }
 }
 
-type Json = Record<string, unknown>
+type Json = PythonJson
 
-/**
- * Python 스크립트를 한 번 실행하고, doneTypes 중 하나가 나오면 그 메시지로 끝낸다.
- * progress 메시지는 onProgress 로 넘기고, error 메시지·비정상 종료는 { type: 'error' } 로 돌려준다.
- */
 function runOnce(
   script: string,
   args: string[],
@@ -40,35 +22,7 @@ function runOnce(
   onProgress?: (data: Json) => void,
   track?: (proc: ChildProcess) => void
 ): Promise<Json> {
-  return new Promise((resolve) => {
-    let result: Json | null = null
-    let stderrText = ''
-    const proc = runPythonScript(
-      'bgm',
-      script,
-      args,
-      (data) => {
-        if (data.type === 'progress') onProgress?.(data)
-        else if (doneTypes.includes(String(data.type)) || data.type === 'error') result = data
-      },
-      (stderr) => {
-        stderrText += stderr + '\n'
-      }
-    )
-    track?.(proc)
-    proc.on('close', (code, signal) => {
-      if (result) resolve(result)
-      else if (signal) resolve({ type: 'error', message: '취소되었습니다' })
-      else {
-        // stderr 에는 경고도 섞여 나오므로 마지막 몇 줄만 보여 준다
-        const tail = stderrText.trim().split('\n').slice(-6).join('\n')
-        resolve({ type: 'error', message: tail || `프로세스가 비정상 종료되었습니다 (code: ${code})` })
-      }
-    })
-    proc.on('error', (err) => {
-      if (!result) resolve({ type: 'error', message: err.message })
-    })
-  })
+  return runPythonOnce('bgm', script, args, doneTypes, onProgress, track)
 }
 
 // ── 음악 라이브러리 ──

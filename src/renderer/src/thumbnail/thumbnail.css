@@ -1,0 +1,259 @@
+/* ===== Thumbnail Module ===== */
+.thumb-module {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.thumb-module__folder {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.thumb-module__content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+}
+
+.thumb-module__editor {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.thumb-module__notice {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  font-size: 13px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+/* ===== 준비 패널 ===== */
+.thumb-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.thumb-setup__info,
+.thumb-setup__hint,
+.thumb-setup__message {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.thumb-setup__label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.thumb-setup__field,
+.thumb-edit__field {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: var(--font);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+  outline: none;
+  user-select: text;
+}
+
+.thumb-setup__field:focus,
+.thumb-edit__field:focus {
+  border-color: var(--accent);
+}
+
+.thumb-setup__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thumb-setup__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thumb-setup .progress-bar-container {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.thumb-setup .progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.thumb-setup__error {
+  font-size: 13px;
+  color: var(--danger);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ===== 썸네일 카드 ===== */
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+}
+
+.thumb-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.thumb-card--selected {
+  border-color: var(--success);
+}
+
+.thumb-card__image {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  cursor: pointer;
+}
+
+.thumb-card__image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thumb-card__no,
+.thumb-card__picked,
+.thumb-card__raw {
+  position: absolute;
+  top: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.thumb-card__no {
+  left: 8px;
+}
+
+.thumb-card__picked {
+  right: 8px;
+  background: var(--success);
+  color: #000;
+}
+
+.thumb-card__raw {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.thumb-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+
+.thumb-card__angle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.thumb-card__title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+  user-select: text;
+}
+
+.thumb-card__desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.thumb-card__tags {
+  font-size: 12px;
+  color: var(--accent);
+  user-select: text;
+}
+
+.thumb-card__meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.thumb-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* ===== 문구 수정 ===== */
+.thumb-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thumb-edit__label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.thumb-edit__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.thumb-edit__row--3 {
+  grid-template-columns: 1fr 1fr 1.4fr;
+}
+
+.thumb-edit__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}

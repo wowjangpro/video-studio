@@ -6,6 +6,7 @@ import './common/tabs.css'
 import './autocut/autocut.css'
 import './subtitle/subtitle.css'
 import './bgm/bgm.css'
+import './thumbnail/thumbnail.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

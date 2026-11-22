@@ -1,5 +1,57 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+// ── Thumbnail 타입 ──
+export type ThumbPosition = 'top-left' | 'top-right' | 'top-center' | 'bottom-left' | 'bottom-right' | 'bottom-center'
+export type ThumbColor = 'yellow' | 'red' | 'orange' | 'cyan' | 'green' | 'white'
+export type ThumbFont = 'dohyeon' | 'hanna' | 'ssurround' | 'gothic'
+
+export interface ThumbText {
+  headline: string
+  subline: string
+  highlight: string
+  position: ThumbPosition
+  color: ThumbColor
+  font: ThumbFont
+}
+
+export interface ThumbItem {
+  id: number
+  angle: string
+  idea: string
+  image: string
+  raw: string
+  source: { clip: string; time: number; ref: string }
+  text: ThumbText
+  title: string
+  description: string
+  hashtags: string[]
+  reason: string
+}
+
+export interface ThumbRunResult {
+  version: number
+  createdAt: string
+  model: string
+  basis: 'analysis' | 'sampling'
+  synopsis: string
+  items: ThumbItem[]
+  selected: number | null
+}
+
+export interface ThumbFolderInfo {
+  folder: string
+  clipCount: number
+  totalSec: number | null
+  hasAnalysis: boolean
+  hasStory: boolean
+  synopsis: string
+  result: ThumbRunResult | null
+}
+
+export type ThumbPatch = Partial<ThumbText> & { title?: string; description?: string; hashtags?: string[] }
+
+export type ThumbResult<T> = { ok: true; data: T } | { ok: false; message: string }
+
 // ── 공통 타입 ──
 export interface ProgressData {
   stage: string
@@ -351,7 +403,31 @@ const bgm = {
   }
 }
 
-const api = { ...common, autocut, subtitle, bgm }
+// ── Thumbnail API ──
+const thumbnail = {
+  selectFolder: (): Promise<string | null> => ipcRenderer.invoke('thumbnail:select-folder'),
+  load: (folder: string): Promise<ThumbResult<ThumbFolderInfo>> => ipcRenderer.invoke('thumbnail:load', folder),
+
+  /** 썸네일 5장 + 제목·설명 생성 (진행 상황은 onProgress) */
+  generate: (folder: string, synopsis: string): Promise<ThumbResult<ThumbRunResult>> =>
+    ipcRenderer.invoke('thumbnail:generate', folder, synopsis),
+  cancel: (): Promise<void> => ipcRenderer.invoke('thumbnail:cancel'),
+
+  compose: (folder: string, id: number, patch: ThumbPatch): Promise<ThumbResult<ThumbRunResult>> =>
+    ipcRenderer.invoke('thumbnail:compose', folder, id, patch),
+  select: (folder: string, id: number): Promise<ThumbResult<ThumbRunResult>> =>
+    ipcRenderer.invoke('thumbnail:select', folder, id),
+  reveal: (folder: string, name: string): Promise<void> => ipcRenderer.invoke('thumbnail:reveal', folder, name),
+  copyText: (text: string): Promise<void> => ipcRenderer.invoke('thumbnail:copy-text', text),
+
+  onProgress: (callback: (data: ProgressData) => void) => {
+    const handler = (_: unknown, data: ProgressData): void => callback(data)
+    ipcRenderer.on('thumbnail:progress', handler)
+    return (): void => { ipcRenderer.removeListener('thumbnail:progress', handler) }
+  }
+}
+
+const api = { ...common, autocut, subtitle, bgm, thumbnail }
 
 contextBridge.exposeInMainWorld('electronAPI', api)
 
